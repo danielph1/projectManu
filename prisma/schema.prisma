@@ -1,0 +1,99 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model leads {
+  id                                                Int               @id @default(autoincrement())
+  data_lead                                         DateTime          @db.Date
+  vendedor_id                                       Int
+  origem_id                                         Int?
+  produto_interesse                                 String?           @db.VarChar(150)
+  nome_lead                                         String?           @db.VarChar(150)
+  telefone                                          String?           @db.VarChar(30)
+  respondeu                                         Boolean?          @default(false)
+  gerou_ficha                                       Boolean?          @default(false)
+  aprovou_credito                                   Boolean?          @default(false)
+  visita_agendada                                   Boolean?          @default(false)
+  data_visita                                       DateTime?         @db.Date
+  compareceu                                        Boolean?          @default(false)
+  vendeu                                            Boolean?          @default(false)
+  status_id                                         Int?
+  motivo_perda_id                                   Int?
+  observacoes                                       String?
+  created_at                                        DateTime?         @default(now()) @db.Timestamp(6)
+  updated_at                                        DateTime?         @default(now()) @db.Timestamp(6)
+  vendedor_anterior_id                              Int?
+  cpf                                               String?           @db.VarChar(14)
+  nome_completo                                     String?           @db.VarChar(150)
+  data_nascimento                                   DateTime?         @db.Date
+  habilitado                                        Boolean?
+  data_hora_visita                                  DateTime?         @db.Timestamp(6)
+  data_venda                                        DateTime?         @db.Date
+  motivos_perda                                     motivos_perda?    @relation(fields: [motivo_perda_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  origens_lead                                      origens_lead?     @relation(fields: [origem_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  status_lead                                       status_lead?      @relation(fields: [status_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vendedores_leads_vendedor_anterior_idTovendedores vendedores?       @relation("leads_vendedor_anterior_idTovendedores", fields: [vendedor_anterior_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vendedores_leads_vendedor_idTovendedores          vendedores        @relation("leads_vendedor_idTovendedores", fields: [vendedor_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  leads_historico                                   leads_historico[]
+
+  @@index([data_lead], map: "idx_leads_data")
+  @@index([origem_id], map: "idx_leads_origem")
+  @@index([vendedor_id], map: "idx_leads_vendedor")
+  @@index([vendeu], map: "idx_leads_vendeu")
+}
+
+model leads_historico {
+  id             Int       @id @default(autoincrement())
+  lead_id        Int?
+  campo_alterado String?   @db.VarChar(50)
+  valor_antigo   String?
+  valor_novo     String?
+  alterado_por   Int?
+  created_at     DateTime? @default(now()) @db.Timestamp(6)
+  leads          leads?    @relation(fields: [lead_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model motivos_perda {
+  id    Int     @id @default(autoincrement())
+  nome  String  @unique @db.VarChar(100)
+  leads leads[]
+}
+
+model origens_lead {
+  id    Int     @id @default(autoincrement())
+  nome  String  @unique @db.VarChar(50)
+  leads leads[]
+}
+
+model status_lead {
+  id    Int     @id @default(autoincrement())
+  nome  String  @unique @db.VarChar(50)
+  leads leads[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model usuarios {
+  id          Int         @id @default(autoincrement())
+  nome        String      @db.VarChar(100)
+  login       String      @unique @db.VarChar(100)
+  senha_hash  String      @db.VarChar(255)
+  tipo        String      @db.VarChar(20)
+  vendedor_id Int?
+  ativo       Boolean?    @default(true)
+  created_at  DateTime?   @default(now()) @db.Timestamp(6)
+  vendedores  vendedores? @relation(fields: [vendedor_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model vendedores {
+  id                                           Int        @id @default(autoincrement())
+  nome                                         String     @unique @db.VarChar(100)
+  ativo                                        Boolean?   @default(true)
+  created_at                                   DateTime?  @default(now()) @db.Timestamp(6)
+  leads_leads_vendedor_anterior_idTovendedores leads[]    @relation("leads_vendedor_anterior_idTovendedores")
+  leads_leads_vendedor_idTovendedores          leads[]    @relation("leads_vendedor_idTovendedores")
+  usuarios                                     usuarios[]
+}
