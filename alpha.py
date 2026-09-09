@@ -283,52 +283,7 @@ if st.session_state["usuario_logado"] is None:
 # ==========================================
 # 2. SISTEMA PRINCIPAL (APÓS LOGIN)
 # ==========================================
-user = st.session_state.get("user", {})
-tipo_usuario = user.get("tipo", "vendedor")
-
-with st.sidebar:
-    st.markdown(f"### 👤 Logado como:\n**{user.get('nome', '')}**")
-    st.caption(f"Perfil: {tipo_usuario.upper()}")
-    
-    if st.button("Sair (Logout)", use_container_width=True):
-        logout()
-        
-    st.markdown("---")
-    st.header("Navegação")
-
-    # Se for elfenai ou documento, mostra apenas a navegação específica deles
-    if tipo_usuario == "elfenai":
-        btn_elf = "primary" if st.session_state["pagina_atual"] == "elfenai_fichas" else "secondary"
-        if st.button("Gestão de Fichas", use_container_width=True, type=btn_elf):
-            st.session_state["pagina_atual"] = "elfenai_fichas"
-            st.rerun()
-            
-    elif tipo_usuario == "documento":
-        btn_doc = "primary" if st.session_state["pagina_atual"] == "documentos" else "secondary"
-        if st.button("Central de Documentos", use_container_width=True, type=btn_doc):
-            st.session_state["pagina_atual"] = "documentos"
-            st.rerun()
-            
-    else:
-        # Menu padrão para Vendedores e Admins
-        btn_p_leads = "primary" if st.session_state["pagina_atual"] == "leads" else "secondary"
-        if st.button("Painel de Leads", use_container_width=True, type=btn_p_leads):
-            st.session_state["pagina_atual"] = "leads"
-            st.rerun()
-            
-        if user.get("is_admin") or tipo_usuario == "admin":
-            btn_p_vendedores = "primary" if st.session_state["pagina_atual"] == "vendedores" else "secondary"
-            if st.button("Equipe de Vendedores", use_container_width=True, type=btn_p_vendedores):
-                st.session_state["pagina_atual"] = "vendedores"
-                st.rerun()
-                
-        # Chat geral
-        total_nao_lidas = contar_mensagens_nao_lidas(user.get('vendedor_id'))
-        label_chat = f"Central de Chat" + (f" ({total_nao_lidas})" if total_nao_lidas > 0 else "")
-        btn_p_chat = "primary" if st.session_state["pagina_atual"] == "chat" else "secondary"
-        if st.button(label_chat, use_container_width=True, type=btn_p_chat):
-            st.session_state["pagina_atual"] = "chat"
-            st.rerun()
+user = st.session_state["usuario_logado"]
 
 # --- SIDEBAR PRINCIPAL DO STREAMLIT ---
 with st.sidebar:
