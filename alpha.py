@@ -383,11 +383,6 @@ if st.session_state["pagina_atual"] == "leads":
             st.metric("Fichas Aprovadas", a_fichas)
         with col_e3:
             st.metric("Fichas Negadas", n_fichas)
-            
-    else:
-        # --- AQUI FICA O SEU CÓDIGO ATUAL DE LEADS (Admin / Vendedor) ---
-        total_leads, total_fichas, total_aprovados, total_vendidos = 0, 0, 0, 0
-        # ... (todo o seu bloco atual de col_header, col_m1, col_m2, etc.)
 
 #  -----------VENDEDORES-----------
 
