@@ -3,13 +3,11 @@ import pandas as pd
 from sqlalchemy import text
 import sys
 import os
-# Adiciona o diretório raiz ao path se necessário
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from alpha import contar_mensagens_nao_lidas
 
-
 def renderizar(user, engine, contar_mensagens_nao_lidas):
-    # Aqui dentro vai todo o código gigante que você colou da linha 290 em diante
     tipo_usuario = user.get("tipo", "vendedor")
     with st.sidebar:
         st.markdown(f"### 👤 Logado como:\n**{user.get('nome', '')}**")
@@ -21,20 +19,17 @@ def renderizar(user, engine, contar_mensagens_nao_lidas):
         st.markdown("---")
         st.header("Navegação")
         
-    # --- PAGINA DE LEAD ---
+        # --- NAVEGAÇÃO ---
         btn_p_leads = "primary" if st.session_state["pagina_atual"] == "leads" else "secondary"
         if st.button("Painel de Leads", use_container_width=True, type=btn_p_leads):
             st.session_state["pagina_atual"] = "leads"
             st.rerun()
 
-    # --- PAGINA DE VENDEDORES ---
         btn_p_vendedores = "primary" if st.session_state["pagina_atual"] == "vendedores" else "secondary"
         if st.button("Equipe de Vendedores", use_container_width=True, type=btn_p_vendedores):
             st.session_state["pagina_atual"] = "vendedores"
             st.rerun()
 
-
-        # Botão de Chat com Notificação Geral
         total_nao_lidas = contar_mensagens_nao_lidas(user.get('vendedor_id'))
         label_chat = f"Central de Chat" + (f" 🔴 ({total_nao_lidas})" if total_nao_lidas > 0 else "")
         
@@ -50,21 +45,19 @@ def renderizar(user, engine, contar_mensagens_nao_lidas):
                 st.session_state['abrir_formulario'] = True
                 st.rerun()
 
-    # --- PAGINA DE FICHAS PENDENTE ---
-        btn_p_ficha = "primary" if st.session_state["pagina_atual"] == "ficha_pendente" else "secondary"
-        if st.button("fichas pendentes", use_container_width=True, type=btn_p_vendedores):
+        # --- FICHAS ---
+        btn_p_fp = "primary" if st.session_state["pagina_atual"] == "ficha_pendente" else "secondary"
+        if st.button("Fichas Pendentes", use_container_width=True, type=btn_p_fp):
             st.session_state["pagina_atual"] = "ficha_pendente"
             st.rerun()
 
-    # --- PAGINA DE FICHA APROVADA ---
-        btn_p_ficha = "primary" if st.session_state["pagina_atual"] == "ficha_aprovada" else "secondary"
-        if st.button("fichas aprovada", use_container_width=True, type=btn_p_vendedores):
+        btn_p_fa = "primary" if st.session_state["pagina_atual"] == "ficha_aprovada" else "secondary"
+        if st.button("Fichas Aprovadas", use_container_width=True, type=btn_p_fa):
             st.session_state["pagina_atual"] = "ficha_aprovada"
             st.rerun()
 
-    # --- PAGINA DE FICHA NEGADA ---
-        btn_p_ficha = "primary" if st.session_state["pagina_atual"] == "ficha_negada" else "secondary"
-        if st.button("fichas negadas", use_container_width=True, type=btn_p_vendedores):
+        btn_p_fn = "primary" if st.session_state["pagina_atual"] == "ficha_negada" else "secondary"
+        if st.button("Fichas Negadas", use_container_width=True, type=btn_p_fn):
             st.session_state["pagina_atual"] = "ficha_negada"
             st.rerun()
 
@@ -72,12 +65,30 @@ def renderizar(user, engine, contar_mensagens_nao_lidas):
     # PÁGINA 1: PAINEL DE LEADS
     # ==========================================
     if st.session_state["pagina_atual"] == "leads":
+        # Buscar métricas reais do banco
+        try:
+            query_metrics = text("""
+                SELECT 
+                    COUNT(*) AS total_leads,
+                    COUNT(*) FILTER (WHERE gerou_ficha = TRUE) AS total_fichas,
+                    COUNT(*) FILTER (WHERE aprovou_credito = TRUE) AS total_aprovados,
+                    COUNT(*) FILTER (WHERE venda_concluida = TRUE) AS total_vendidos
+                FROM public.leads
+                WHERE (:is_admin = TRUE OR vendedor_id = :vendedor_id)
+            """)
+            with engine.connect() as conn:
+                res_metrics = conn.execute(query_metrics, {
+                    "is_admin": user["is_admin"],
+                    "vendedor_id": user["vendedor_id"]
+                }).fetchone()
+                
+                total_leads = res_metrics[0] if res_metrics else 0
+                total_fichas = res_metrics[1] if res_metrics else 0
+                total_aprovados = res_metrics[2] if res_metrics else 0
+                total_vendidos = res_metrics[3] if res_metrics else 0
+        except Exception:
+            total_leads, total_fichas, total_aprovados, total_vendidos = 0, 0, 0, 0
 
-    #  -----------VENDEDORES-----------
-
-        total_leads, total_fichas, total_aprovados, total_vendidos = 0, 0, 0, 0
-
-        # Layout de topo: Cabeçalho + 4 Métricas (dividido em 5 colunas)
         col_header, col_m1, col_m2, col_m3, col_m4 = st.columns([1.8, 1, 1, 1, 1])
 
         with col_header:
@@ -85,33 +96,32 @@ def renderizar(user, engine, contar_mensagens_nao_lidas):
 
         with col_m1:
             st.metric(label="Total Leads", value=total_leads)
-            tipo_btn = "primary" if st.session_state["filtro_categoria"] == "todos" else "secondary"
+            tipo_btn = "primary" if st.session_state.get("filtro_categoria") == "todos" else "secondary"
             if st.button("Ver Todos", key="btn_f_todos", use_container_width=True, type=tipo_btn):
                 st.session_state["filtro_categoria"] = "todos"
                 st.rerun()
 
         with col_m2:
             st.metric(label="Fichas Geradas", value=total_fichas)
-            tipo_btn = "primary" if st.session_state["filtro_categoria"] == "fichas" else "secondary"
+            tipo_btn = "primary" if st.session_state.get("filtro_categoria") == "fichas" else "secondary"
             if st.button("Filtrar Fichas", key="btn_f_fichas", use_container_width=True, type=tipo_btn):
                 st.session_state["filtro_categoria"] = "fichas"
                 st.rerun()
 
         with col_m3:
             st.metric(label="Aprovados", value=total_aprovados)
-            tipo_btn = "primary" if st.session_state["filtro_categoria"] == "aprovados" else "secondary"
+            tipo_btn = "primary" if st.session_state.get("filtro_categoria") == "aprovados" else "secondary"
             if st.button("Filtrar Aprovados", key="btn_f_aprovados", use_container_width=True, type=tipo_btn):
                 st.session_state["filtro_categoria"] = "aprovados"
                 st.rerun()
 
         with col_m4:
             st.metric(label="Vendidos", value=total_vendidos)
-            tipo_btn = "primary" if st.session_state["filtro_categoria"] == "vendidos" else "secondary"
+            tipo_btn = "primary" if st.session_state.get("filtro_categoria") == "vendidos" else "secondary"
             if st.button("Filtrar Vendidos", key="btn_f_vendidos", use_container_width=True, type=tipo_btn):
                 st.session_state["filtro_categoria"] = "vendidos"
                 st.rerun()
 
-        # Formulário de Novo Lead
         if st.session_state.get('abrir_formulario', False):
             st.subheader("Novo Lead")
             df_vendedores = obter_vendedores()
@@ -182,9 +192,8 @@ def renderizar(user, engine, contar_mensagens_nao_lidas):
                             st.session_state['abrir_formulario'] = False
                             st.rerun()
                         except Exception as e:
-                            st.error("Por favor, preencha os dados corretamente!")
+                            st.error(f"Erro ao inserir lead: {e}")
 
-        # Barra de Busca e Cards
         st.markdown("---")
         termo_busca = st.text_input("Buscar Lead (Nome, CPF ou Telefone)", placeholder="Digite o nome, CPF ou número para filtrar...")
         if st.button("➕ Adicionar Novo Lead", key="btn_add_lead_busca", use_container_width=True, type="primary"):
@@ -195,7 +204,7 @@ def renderizar(user, engine, contar_mensagens_nao_lidas):
 
         try:
             df_vendedores = obter_vendedores()
-            cat_filtro = st.session_state["filtro_categoria"]
+            cat_filtro = st.session_state.get("filtro_categoria", "todos")
             
             query_select = text("""
                 SELECT 
@@ -284,295 +293,3 @@ def renderizar(user, engine, contar_mensagens_nao_lidas):
 
         except Exception as e:
             st.error(f"Erro ao carregar dados do banco: {e}")
-
-    # ==========================================
-    # PÁGINA 2: EQUIPE DE VENDEDORES
-    # ==========================================
-    elif st.session_state["pagina_atual"] == "vendedores":
-        st.title("Equipe de Vendedores")
-        st.markdown("Confira o desempenho geral e interaja com a equipe.")
-        st.markdown("---")
-
-        try:
-            query_vendedores_stats = text("""
-                    SELECT 
-                        v.id,
-                        v.nome,
-                        COUNT(l.id) AS total_leads,
-                        COUNT(l.id) FILTER (WHERE l.gerou_ficha = TRUE) AS total_fichas,
-                        COUNT(l.id) FILTER (WHERE l.aprovou_credito = TRUE) AS total_aprovados,
-                        COUNT(l.id) FILTER (WHERE l.vendeu = TRUE OR l.venda_concluida = TRUE) AS total_vendas
-                    FROM public.vendedores v
-                    LEFT JOIN public.leads l ON l.vendedor_id = v.id
-                    GROUP BY v.id, v.nome
-                    ORDER BY total_vendas DESC, total_aprovados DESC, total_leads DESC, v.nome ASC
-                """)
-            
-            with engine.connect() as conn:
-                df_vend = pd.read_sql_query(query_vendedores_stats, conn)
-
-            if df_vend.empty:
-                st.info("Nenhum vendedor encontrado.")
-            else:
-                cols_v = st.columns(3)
-                for idx, row_v in df_vend.iterrows():
-
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("Leads", int(row_v.get("total_leads", 0)))
-                    m2.metric("Fichas", int(row_v.get("total_fichas", 0)))
-                    m3.metric("Aprovados", int(row_v.get("total_aprovados", 0)))
-                    m4.metric("Vendas", int(row_v.get("total_vendas", 0)))
-
-                    with cols_v[idx % 3]:
-
-                        with st.container(border=True):
-                            foto = row_v.get('foto_url') if 'foto_url' in row_v and pd.notnull(row_v['foto_url']) and row_v['foto_url'] != "" else "https://cdn-icons-png.flaticon.com/512/149/149071.png"
-                            
-                            col_img, col_nome = st.columns([1, 2])
-                            with col_img:
-                                st.image(foto, width=80)
-                            with col_nome:
-                                st.markdown(f"### {row_v['nome']}")
-                                
-                                btn_f1, btn_f2 = st.columns(2)
-                                with btn_f1:
-                                    if st.button("Foto", key=f"foto_btn_{row_v['id']}", use_container_width=True):
-                                        editar_foto_modal(row_v['id'], row_v['nome'], row_v['foto_url'])
-                                with btn_f2:
-                                    if row_v['id'] != user['vendedor_id']:
-                                        nao_lidas_vendedor = contar_mensagens_nao_lidas(user.get('vendedor_id'), row_v['id'])
-                                        btn_label = f"Chat ({nao_lidas_vendedor})" if nao_lidas_vendedor > 0 else "💬 Chat"
-                                        
-                                        if st.button(btn_label, key=f"chat_btn_{row_v['id']}", use_container_width=True):
-                                            st.session_state["chat_vendedor_selecionado"] = row_v['id']
-                                            st.session_state["pagina_atual"] = "chat"
-                                            st.rerun()
-
-                            st.markdown("---")
-                            st.markdown("##### Desempenho")
-                            
-                            kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-                            kpi1.metric("Leads", row_v['total_leads'])
-                            kpi2.metric("Fichas", row_v['total_fichas'])
-                            kpi3.metric("Aprovados", row_v['total_aprovados'])
-                            kpi4.metric("Vendas", row_v['total_vendas'])
-
-        except Exception as e:
-            st.error(f"Erro ao carregar vendedores: {e}")
-
-    # ==========================================
-    # PÁGINA 3: CENTRAL DE CHAT (LAYOUT CARD + CONVERSA)
-    # ==========================================
-    elif st.session_state["pagina_atual"] == "chat":
-        st.title("Central de Mensagens")
-        st.markdown("---")
-
-        meu_vendedor_id = user.get("vendedor_id")
-
-        if not meu_vendedor_id:
-            st.warning("Seu usuário não tem um perfil de vendedor associado (`vendedor_id` é nulo). Vincule seu usuário a um vendedor para utilizar o chat.")
-        else:
-            df_outros = obter_vendedores()
-            df_outros = df_outros[df_outros["id"] != meu_vendedor_id]
-
-            if df_outros.empty:
-                st.info("Não há outros vendedores no sistema para conversar.")
-            else:
-                # Garante uma seleção padrão caso não haja nenhuma ativa
-                if st.session_state["chat_vendedor_selecionado"] not in df_outros["id"].values:
-                    st.session_state["chat_vendedor_selecionado"] = df_outros["id"].iloc[0]
-
-                # Layout estilo WhatsApp Web: 1 Coluna Lateral de Cards (1.2) + 1 Área Principal de Conversa (3)
-                col_lista, col_conversa = st.columns([1.2, 3])
-
-                # --- LISTA LATERAL DE CARDS DOS VENDEDORES ---
-                with col_lista:
-                    st.markdown("##### 👥 Contatos")
-                    for _, v_row in df_outros.iterrows():
-                        vid = v_row['id']
-                        vnome = v_row['nome']
-                        vfoto = v_row['foto_url'] if pd.notnull(v_row['foto_url']) and v_row['foto_url'] != "" else "https://cdn-icons-png.flaticon.com/512/3135/3135715.png"
-                        
-                        nao_lidas = contar_mensagens_nao_lidas(meu_vendedor_id, vid)
-                        
-                        # Estilização visual do card ativo/inativo
-                        eh_selecionado = (vid == st.session_state["chat_vendedor_selecionado"])
-                        tipo_botao = "primary" if eh_selecionado else "secondary"
-                        
-                        # Label com indicação de mensagem pendente
-                        btn_label = f"💬 {vnome}"
-                        if nao_lidas > 0:
-                            btn_label = f"🔴 {vnome} ({nao_lidas})"
-
-                        with st.container(border=True):
-                            c_img, c_info = st.columns([1, 2.5])
-                            with c_img:
-                                st.image(vfoto, width=45)
-                            with c_info:
-                                if st.button(btn_label, key=f"card_chat_v_{vid}", use_container_width=True, type=tipo_botao):
-                                    st.session_state["chat_vendedor_selecionado"] = vid
-                                    st.rerun()
-
-                # --- ÁREA DE CHAT / CONVERSA PRINCIPAL ---
-                with col_conversa:
-                    outro_vid = st.session_state["chat_vendedor_selecionado"]
-                    outro_vendedor = df_outros[df_outros["id"] == outro_vid].iloc[0]
-                    
-                    # Marca como lidas automaticamente
-                    marcar_mensagens_como_lidas(meu_vendedor_id, outro_vid)
-
-                    st.markdown(f"### Conversa com **{outro_vendedor['nome']}**")
-
-                    query_chat = text("""
-                        SELECT 
-                            c.id, c.remetente_id, c.destinatario_id, c.mensagem, c.created_at,
-                            v.nome AS nome_remetente
-                        FROM public.chat_mensagens c
-                        JOIN public.vendedores v ON v.id = c.remetente_id
-                        WHERE 
-                            (c.remetente_id = :meu_id AND c.destinatario_id = :outro_id) OR
-                            (c.remetente_id = :outro_id AND c.destinatario_id = :meu_id)
-                        ORDER BY c.created_at ASC
-                    """)
-
-                    with engine.connect() as conn:
-                        df_chat = pd.read_sql_query(query_chat, conn, params={"meu_id": meu_vendedor_id, "outro_id": outro_vid})
-
-                    chat_container = st.container(height=450)
-                    with chat_container:
-                        if df_chat.empty:
-                            st.caption("Sem histórico de mensagens. Comece a conversa digitando abaixo!")
-                        else:
-                            for _, msg in df_chat.iterrows():
-                                is_me = (msg["remetente_id"] == meu_vendedor_id)
-                                hora_str = pd.to_datetime(msg["created_at"]).strftime("%H:%M - %d/%m")
-                                with st.chat_message("user" if is_me else "assistant", avatar="👤" if is_me else "💬"):
-                                    st.caption(f"**{msg['nome_remetente']}** • {hora_str}")
-                                    st.write(msg["mensagem"])
-
-                    if novo_texto := st.chat_input("Digite sua mensagem..."):
-                        query_envio = text("""
-                            INSERT INTO public.chat_mensagens (remetente_id, destinatario_id, mensagem, created_at, lida)
-                            VALUES (:meu_id, :outro_id, :msg, NOW(), FALSE)
-                        """)
-                        with engine.begin() as conn:
-                            conn.execute(query_envio, {
-                                "meu_id": meu_vendedor_id,
-                                "outro_id": outro_vid,
-                                "msg": novo_texto.strip()
-                            })
-                        st.rerun()
-
-@st.dialog("Editar Lead")
-def editar_lead_modal(lead_data, df_vendedores):
-    user = st.session_state.get("user", {})
-    st.write(f"Editando informações de **{lead_data['nome_lead']}**")
-    
-    with st.form("form_edicao"):
-        novo_nome = st.text_input("Nome do Lead", value=lead_data['nome_lead'])
-        novo_tel = st.text_input("Telefone", value=lead_data['telefone'])
-        
-        vendedor_atual_id = lead_data['vendedor_id']
-        opcoes_vendedores = df_vendedores["id"].tolist()
-        index_vendedor = opcoes_vendedores.index(vendedor_atual_id) if vendedor_atual_id in opcoes_vendedores else 0
-        
-        novo_vendedor_id = st.selectbox(
-            "Vendedor Responsável",
-            options=opcoes_vendedores,
-            index=index_vendedor,
-            format_func=lambda x: df_vendedores[df_vendedores["id"] == x]["nome"].values[0],
-            disabled=not user["is_admin"]
-        )
-        
-        col_status1, col_status2, col_status3 = st.columns(3)
-        with col_status1:
-            gerou_ficha = st.checkbox("Gerou Ficha", value=bool(lead_data['gerou_ficha']))
-        with col_status2:
-            respondeu = st.checkbox("Respondeu", value=bool(lead_data.get('respondeu', False)))
-        with col_status3:
-            venda_concluida = st.checkbox("Venda Concluída", value=bool(lead_data.get('venda_concluida', False)))
-            
-        novo_cpf = st.text_input("CPF", value=lead_data['cpf'] if lead_data['cpf'] else "")
-        nova_dt_nasc = st.text_input("Data de Nascimento", value=lead_data['data_nascimento'] if lead_data['data_nascimento'] else "")
-        
-        nova_obs = st.text_area("Observações / Anotações", value=lead_data['observacao'] if pd.notnull(lead_data['observacao']) else "", placeholder="Ex: Cliente prefere hatch automático, retornar ligação no sábado...")
-        
-        btn_salvar = st.form_submit_button("Salvar Alterações", use_container_width=True)
-
-        def trata_vazio(valor):
-            if not valor or str(valor).strip() == "":
-                return None
-            return valor
-        
-        if btn_salvar:
-                try:
-                    query_update = text("""
-                        UPDATE public.leads
-                        SET 
-                            nome_lead = :nome_lead,
-                            telefone = :telefone,
-                            vendedor_id = :vendedor_id,
-                            gerou_ficha = :gerou_ficha,
-                            respondeu = :respondeu,
-                            venda_concluida = :venda_concluida,
-                            vendeu = :venda_concluida,
-                            cpf = :cpf,
-                            data_nascimento = :data_nascimento,
-                            observacoes = :observacoes,
-                            observacao = :observacoes,
-                            updated_at = NOW()
-                        WHERE id = :lead_id
-                    """)
-                    
-                    with engine.connect() as conn:
-                        conn.execute(query_update, {
-                            "nome_lead": trata_vazio(novo_nome),
-                            "telefone": trata_vazio(novo_tel),
-                            "vendedor_id": novo_vendedor_id,
-                            "gerou_ficha": gerou_ficha,
-                            "respondeu": respondeu,
-                            "venda_concluida": venda_concluida,
-                            "cpf": trata_vazio(novo_cpf),
-                            "data_nascimento": trata_vazio(nova_dt_nasc),
-                            "observacoes": trata_vazio(nova_obs),
-                            "lead_id": lead_data["id"]
-                        })
-                        conn.commit()
-                        
-                    st.success("Lead atualizado com sucesso!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erro ao salvar alterações: {e}")
-@st.dialog("⚠️ Excluir Lead")
-def deletar_lead_modal(lead_id, nome_lead):
-    st.warning(f"Tem certeza que deseja apagar o lead **{nome_lead}**?")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Sim, Excluir", type="primary", use_container_width=True):
-            try:
-                query_delete = text("DELETE FROM public.leads WHERE id = :id")
-                with engine.begin() as conn:
-                    conn.execute(query_delete, {"id": lead_id})
-                st.success("Lead excluído!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Erro ao excluir: {e}")
-    with col2:
-        if st.button("Cancelar", use_container_width=True):
-            st.rerun()
-
-@st.dialog("🖼️ Alterar Foto de Perfil")
-def editar_foto_modal(vendedor_id, nome_vendedor, foto_atual):
-    st.write(f"Atualizar foto de **{nome_vendedor}**")
-    nova_foto = st.text_input("URL da Imagem (Link)", value=foto_atual if foto_atual else "")
-    st.caption("Exemplo: https://sua-imagem.com/foto.jpg")
-    
-    if st.button("Salvar Foto", use_container_width=True, type="primary"):
-        try:
-            query_foto = text("UPDATE public.vendedores SET foto_url = :foto WHERE id = :id")
-            with engine.begin() as conn:
-                conn.execute(query_foto, {"foto": nova_foto, "id": vendedor_id})
-            st.success("Foto atualizada!")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Erro ao salvar foto: {e}")
