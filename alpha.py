@@ -348,17 +348,31 @@ with st.sidebar:
 if st.session_state["pagina_atual"] == "leads":
     total_leads, total_fichas, total_aprovados, total_vendidos = 0, 0, 0, 0
     try:
-            query_metrics = text("""
-                SELECT 
-                    COUNT(id) AS total_leads,
-                    COUNT(id) FILTER (WHERE gerou_ficha = TRUE) AS total_fichas,
-                    COUNT(id) FILTER (WHERE aprovou_credito = TRUE) AS total_aprovados,
-                    COUNT(id) FILTER (WHERE vendeu = TRUE OR venda_concluida = TRUE) AS total_vendas
-                FROM public.leads
-            """)
-            
+            # Se for admin, busca tudo. Se não for, filtra apenas pelo ID do vendedor logado
+            if user["is_admin"]:
+                query_metrics = text("""
+                    SELECT 
+                        COUNT(id) AS total_leads,
+                        COUNT(id) FILTER (WHERE gerou_ficha = TRUE) AS total_fichas,
+                        COUNT(id) FILTER (WHERE aprovou_credito = TRUE) AS total_aprovados,
+                        COUNT(id) FILTER (WHERE vendeu = TRUE OR venda_concluida = TRUE) AS total_vendas
+                    FROM public.leads
+                """)
+                params = {}
+            else:
+                query_metrics = text("""
+                    SELECT 
+                        COUNT(id) AS total_leads,
+                        COUNT(id) FILTER (WHERE gerou_ficha = TRUE) AS total_fichas,
+                        COUNT(id) FILTER (WHERE aprovou_credito = TRUE) AS total_aprovados,
+                        COUNT(id) FILTER (WHERE vendeu = TRUE OR venda_concluida = TRUE) AS total_vendas
+                    FROM public.leads
+                    WHERE vendedor_id = :vendedor_id
+                """)
+                params = {"vendedor_id": user["vendedor_id"]}
+
             with engine.connect() as conn:
-                m_result = conn.execute(query_metrics).fetchone()
+                m_result = conn.execute(query_metrics, params).fetchone()
                 if m_result:
                     total_leads = m_result[0] if m_result[0] is not None else 0
                     total_fichas = m_result[1] if m_result[1] is not None else 0
