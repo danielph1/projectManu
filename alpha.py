@@ -102,7 +102,7 @@ def autenticar(login_input, senha_input):
             result = conn.execute(query, {"usr": login_input.strip(), "pwd": senha_input.strip()}).fetchone()
             if result:
                 is_admin = result.tipo in ["admin", "gerente"] 
-                st.session_state["usuario_logado"] = {
+                st.session_state["user"] = {
                     "id": result.id,
                     "nome": result.nome,
                     "login": result.login,
