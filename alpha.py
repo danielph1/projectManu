@@ -348,32 +348,25 @@ with st.sidebar:
 if st.session_state["pagina_atual"] == "leads":
     total_leads, total_fichas, total_aprovados, total_vendidos = 0, 0, 0, 0
     try:
-        query_vendedores_stats = text("""
+            query_metrics = text("""
                 SELECT 
-                    v.id,
-                    v.nome,
-                    COUNT(l.id) AS total_leads,
-                    COUNT(l.id) FILTER (WHERE l.gerou_ficha = TRUE) AS total_fichas,
-                    COUNT(l.id) FILTER (WHERE l.aprovou_credito = TRUE) AS total_aprovados,
-                    COUNT(l.id) FILTER (WHERE l.vendeu = TRUE OR l.venda_concluida = TRUE) AS total_vendas
-                FROM public.vendedores v
-                LEFT JOIN public.leads l ON l.vendedor_id = v.id
-                GROUP BY v.id, v.nome
-                ORDER BY total_vendas DESC, total_aprovados DESC, total_leads DESC, v.nome ASC
+                    COUNT(id) AS total_leads,
+                    COUNT(id) FILTER (WHERE gerou_ficha = TRUE) AS total_fichas,
+                    COUNT(id) FILTER (WHERE aprovou_credito = TRUE) AS total_aprovados,
+                    COUNT(id) FILTER (WHERE vendeu = TRUE OR venda_concluida = TRUE) AS total_vendas
+                FROM public.leads
             """)
-        with engine.connect() as conn:
-            m_result = conn.execute(query_vendedores_stats, {
-                "is_admin": user["is_admin"],
-                "vendedor_id": user["vendedor_id"]
-            }).fetchone()
-        if m_result:
-                total_leads = m_result[0] if m_result[0] is not None else 0
-                total_fichas = m_result[1] if m_result[1] is not None else 0
-                total_aprovados = m_result[2] if m_result[2] is not None else 0
-                total_vendidos = m_result[3] if m_result[3] is not None else 0
+            
+            with engine.connect() as conn:
+                m_result = conn.execute(query_metrics).fetchone()
+                if m_result:
+                    total_leads = m_result[0] if m_result[0] is not None else 0
+                    total_fichas = m_result[1] if m_result[1] is not None else 0
+                    total_aprovados = m_result[2] if m_result[2] is not None else 0
+                    total_vendidos = m_result[3] if m_result[3] is not None else 0
+
     except Exception as e:
         st.error(f"Erro nas métricas: {e}")
-        pass
 
     # Layout de topo: Cabeçalho + 4 Métricas (dividido em 5 colunas)
     col_header, col_m1, col_m2, col_m3, col_m4 = st.columns([1.8, 1, 1, 1, 1])
