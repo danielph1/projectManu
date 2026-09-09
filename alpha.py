@@ -345,7 +345,8 @@ if st.session_state["pagina_atual"] == "leads":
                 total_fichas = m_result.fichas
                 total_aprovados = m_result.aprovados
                 total_vendidos = m_result.vendidos
-    except Exception:
+    except Exception as e:
+        st.error(f"Erro nas métricas: {e}")
         pass
 
     # Layout de topo: Cabeçalho + 4 Métricas (dividido em 5 colunas)
