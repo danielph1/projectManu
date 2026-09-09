@@ -456,3 +456,117 @@ def renderizar(user):
                                 "msg": novo_texto.strip()
                             })
                         st.rerun()
+
+@st.dialog("Editar Lead")
+def editar_lead_modal(lead_data, df_vendedores):
+    user = st.session_state.get("user", {})
+    st.write(f"Editando informações de **{lead_data['nome_lead']}**")
+    
+    with st.form("form_edicao"):
+        novo_nome = st.text_input("Nome do Lead", value=lead_data['nome_lead'])
+        novo_tel = st.text_input("Telefone", value=lead_data['telefone'])
+        
+        vendedor_atual_id = lead_data['vendedor_id']
+        opcoes_vendedores = df_vendedores["id"].tolist()
+        index_vendedor = opcoes_vendedores.index(vendedor_atual_id) if vendedor_atual_id in opcoes_vendedores else 0
+        
+        novo_vendedor_id = st.selectbox(
+            "Vendedor Responsável",
+            options=opcoes_vendedores,
+            index=index_vendedor,
+            format_func=lambda x: df_vendedores[df_vendedores["id"] == x]["nome"].values[0],
+            disabled=not user["is_admin"]
+        )
+        
+        col_status1, col_status2, col_status3 = st.columns(3)
+        with col_status1:
+            gerou_ficha = st.checkbox("Gerou Ficha", value=bool(lead_data['gerou_ficha']))
+        with col_status2:
+            respondeu = st.checkbox("Respondeu", value=bool(lead_data.get('respondeu', False)))
+        with col_status3:
+            venda_concluida = st.checkbox("Venda Concluída", value=bool(lead_data.get('venda_concluida', False)))
+            
+        novo_cpf = st.text_input("CPF", value=lead_data['cpf'] if lead_data['cpf'] else "")
+        nova_dt_nasc = st.text_input("Data de Nascimento", value=lead_data['data_nascimento'] if lead_data['data_nascimento'] else "")
+        
+        nova_obs = st.text_area("Observações / Anotações", value=lead_data['observacao'] if pd.notnull(lead_data['observacao']) else "", placeholder="Ex: Cliente prefere hatch automático, retornar ligação no sábado...")
+        
+        btn_salvar = st.form_submit_button("Salvar Alterações", use_container_width=True)
+
+        def trata_vazio(valor):
+            if not valor or str(valor).strip() == "":
+                return None
+            return valor
+        
+        if btn_salvar:
+                try:
+                    query_update = text("""
+                        UPDATE public.leads
+                        SET 
+                            nome_lead = :nome_lead,
+                            telefone = :telefone,
+                            vendedor_id = :vendedor_id,
+                            gerou_ficha = :gerou_ficha,
+                            respondeu = :respondeu,
+                            venda_concluida = :venda_concluida,
+                            vendeu = :venda_concluida,
+                            cpf = :cpf,
+                            data_nascimento = :data_nascimento,
+                            observacoes = :observacoes,
+                            observacao = :observacoes,
+                            updated_at = NOW()
+                        WHERE id = :lead_id
+                    """)
+                    
+                    with engine.connect() as conn:
+                        conn.execute(query_update, {
+                            "nome_lead": trata_vazio(novo_nome),
+                            "telefone": trata_vazio(novo_tel),
+                            "vendedor_id": novo_vendedor_id,
+                            "gerou_ficha": gerou_ficha,
+                            "respondeu": respondeu,
+                            "venda_concluida": venda_concluida,
+                            "cpf": trata_vazio(novo_cpf),
+                            "data_nascimento": trata_vazio(nova_dt_nasc),
+                            "observacoes": trata_vazio(nova_obs),
+                            "lead_id": lead_data["id"]
+                        })
+                        conn.commit()
+                        
+                    st.success("Lead atualizado com sucesso!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao salvar alterações: {e}")
+@st.dialog("⚠️ Excluir Lead")
+def deletar_lead_modal(lead_id, nome_lead):
+    st.warning(f"Tem certeza que deseja apagar o lead **{nome_lead}**?")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Sim, Excluir", type="primary", use_container_width=True):
+            try:
+                query_delete = text("DELETE FROM public.leads WHERE id = :id")
+                with engine.begin() as conn:
+                    conn.execute(query_delete, {"id": lead_id})
+                st.success("Lead excluído!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro ao excluir: {e}")
+    with col2:
+        if st.button("Cancelar", use_container_width=True):
+            st.rerun()
+
+@st.dialog("🖼️ Alterar Foto de Perfil")
+def editar_foto_modal(vendedor_id, nome_vendedor, foto_atual):
+    st.write(f"Atualizar foto de **{nome_vendedor}**")
+    nova_foto = st.text_input("URL da Imagem (Link)", value=foto_atual if foto_atual else "")
+    st.caption("Exemplo: https://sua-imagem.com/foto.jpg")
+    
+    if st.button("Salvar Foto", use_container_width=True, type="primary"):
+        try:
+            query_foto = text("UPDATE public.vendedores SET foto_url = :foto WHERE id = :id")
+            with engine.begin() as conn:
+                conn.execute(query_foto, {"foto": nova_foto, "id": vendedor_id})
+            st.success("Foto atualizada!")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Erro ao salvar foto: {e}")
