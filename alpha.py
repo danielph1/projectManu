@@ -288,7 +288,7 @@ tipo_usuario = user.get("tipo", "vendedor")
 
 with st.sidebar:
     st.markdown(f"### 👤 Logado como:\n**{user.get('nome', '')}**")
-    st.caption(f"Perfil: {user['tipo'].upper()}")
+    st.caption(f"Perfil: {tipo_usuario.upper()}")
     
     if st.button("Sair (Logout)", use_container_width=True):
         logout()
