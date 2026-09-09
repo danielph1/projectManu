@@ -134,7 +134,7 @@ def obter_vendedores():
 # ==========================================
 # MODAIS / DIALOGS (ESCOPO GLOBAL)
 # ==========================================
-@st.dialog("✏️ Editar Lead")
+@st.dialog("Editar Lead")
 def editar_lead_modal(lead_data, df_vendedores):
     user = st.session_state["usuario_logado"]
     st.write(f"Editando informações de **{lead_data['nome_lead']}**")
@@ -157,18 +157,23 @@ def editar_lead_modal(lead_data, df_vendedores):
         
         col_status1, col_status2, col_status3 = st.columns(3)
         with col_status1:
-            gerou_ficha = st.checkbox("Gerou Ficha?", value=bool(lead_data['gerou_ficha']))
+            gerou_ficha = st.checkbox("Gerou Ficha", value=bool(lead_data['gerou_ficha']))
         with col_status2:
-            respondeu = st.checkbox("Respondeu?", value=bool(lead_data['respondeu']))
+            respondeu = st.checkbox("Respondeu", value=bool(lead_data.get('respondeu', False)))
         with col_status3:
-            venda_concluida = st.checkbox("🎉 Venda Concluída?", value=bool(lead_data.get('venda_concluida', False)))
+            venda_concluida = st.checkbox("Venda Concluída", value=bool(lead_data.get('venda_concluida', False)))
             
         novo_cpf = st.text_input("CPF", value=lead_data['cpf'] if lead_data['cpf'] else "")
         nova_dt_nasc = st.text_input("Data de Nascimento", value=lead_data['data_nascimento'] if lead_data['data_nascimento'] else "")
         
-        nova_obs = st.text_area("📝 Observações / Anotações", value=lead_data['observacao'] if pd.notnull(lead_data['observacao']) else "", placeholder="Ex: Cliente prefere hatch automático, retornar ligação no sábado...")
+        nova_obs = st.text_area("Observações / Anotações", value=lead_data['observacao'] if pd.notnull(lead_data['observacao']) else "", placeholder="Ex: Cliente prefere hatch automático, retornar ligação no sábado...")
         
         btn_salvar = st.form_submit_button("Salvar Alterações", use_container_width=True)
+
+        def trata_vazio(valor):
+            if not valor or str(valor).strip() == "":
+                return None
+            return valor
         
         if btn_salvar:
             try:
@@ -194,16 +199,17 @@ def editar_lead_modal(lead_data, df_vendedores):
                         "vendedor": novo_vendedor_id,
                         "ficha": gerou_ficha,
                         "venda": venda_concluida,
-                        "respondeu": respondeu,
-                        "cpf": novo_cpf if gerou_ficha else None,
-                        "dt_nasc": nova_dt_nasc if gerou_ficha else None,
-                        "obs": nova_obs.strip() if nova_obs else None,
+                        "cpf": trata_vazio(novo_cpf),
+                        "dt_nasc": trata_vazio(nova_dt_nasc),
+                        "hab": habilitado,
+                        "aprovado": aprovado_credito,
+                        "obs": trata_vazio(nova_obs),
                         "id": lead_data['id']
                     })
                 st.success("Lead atualizado com sucesso!")
                 st.rerun()
             except Exception as e:
-                st.error(f"Erro ao atualizar: {e}")
+                st.warning("⚠️ Por favor, revise e preencha corretamente os campos obrigatórios antes de salvar.")
 
 @st.dialog("⚠️ Excluir Lead")
 def deletar_lead_modal(lead_id, nome_lead):
@@ -362,7 +368,7 @@ if st.session_state["pagina_atual"] == "leads":
             st.rerun()
 
     with col_m4:
-        st.metric(label="Vendidos 🎉", value=total_vendidos)
+        st.metric(label="Vendidos", value=total_vendidos)
         tipo_btn = "primary" if st.session_state["filtro_categoria"] == "vendidos" else "secondary"
         if st.button("Filtrar Vendidos", key="btn_f_vendidos", use_container_width=True, type=tipo_btn):
             st.session_state["filtro_categoria"] = "vendidos"
@@ -393,7 +399,7 @@ if st.session_state["pagina_atual"] == "leads":
                 data_lead = st.date_input("Data que o Lead Chegou*")
                 venda_concluida = st.checkbox("Venda Concluída?")
             
-            gerou_ficha = st.checkbox("Gerou Ficha?")
+            gerou_ficha = st.checkbox("Gerou Ficha")
             cpf, data_nascimento, habilitado, aprovou_credito = None, None, None, None
 
             if gerou_ficha:
@@ -404,9 +410,9 @@ if st.session_state["pagina_atual"] == "leads":
                     cpf = st.text_input("CPF")
                     data_nascimento = st.text_input("Data de Nascimento (Texto ex: 10/04/1995)")
                 with col2:
-                    habilitado_opcao = st.radio("O cliente é habilitado?", ["Não", "Sim"], horizontal=True)
+                    habilitado_opcao = st.radio("O cliente é habilitado", ["Não", "Sim"], horizontal=True)
                     habilitado = True if habilitado_opcao == "Sim" else False
-                    status_credito = st.radio("Status do Crédito", ["Em Análise", "Aprovado", "Recusado"], horizontal=True)
+                    status_credito = st.radio("Status do Crédito", ["Aprovado", "Recusado"], horizontal=True)
                     aprovou_credito = True if status_credito == "Aprovado" else (False if status_credito == "Recusado" else None)
 
             observacao_txt = st.text_area("📝 Observações Gerais", placeholder="Escreva aqui notas sobre a negociação ou cliente...")
@@ -439,7 +445,7 @@ if st.session_state["pagina_atual"] == "leads":
                         st.session_state['abrir_formulario'] = False
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Erro ao salvar no banco: {e}")
+                        st.error("Por favor, preencha os dados corretamente!")
 
     # Barra de Busca e Cards
     st.markdown("---")

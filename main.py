@@ -1,22 +1,26 @@
+import os
 import pandas as pd
 import requests
 from io import StringIO
 from datetime import datetime
 import psycopg2
+import streamlit as st
+from sqlalchemy import create_engine
 
-# ====================== CONFIGURAÇÃO ======================
+# ======================= CONFIGURAÇÃO =======================
 SHEET_ID = "1a9Syo0Qf_yZmRaTHoX2NRO_-rsivvvaV5G6durUbBz4"
 GID = "0"
 CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
 
-DB_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "database": "manuProject",
-    "user": "postgres",
-    "password": "danielDantas"
-}
-# ==========================================================
+# Gerenciamento de Conexão: Usa st.secrets na nuvem ou Supabase direto no ambiente local
+try:
+    DB_URL = st.secrets["postgres"]["url"]
+except Exception:
+    DB_URL = "postgresql://postgres:danielDantas123@db.nqghtobrrvtmstowirix.supabase.co:5432/postgres"
+
+# Cria a engine do SQLAlchemy conectando ao Supabase
+engine = create_engine(DB_URL)
+# ============================================================
 
 def limpar_texto(valor):
     if pd.isna(valor):
@@ -67,9 +71,10 @@ def main():
 
     df.columns = [c.strip() for c in df.columns]
 
-    conn = psycopg2.connect(**DB_CONFIG)
+    # Abre a conexão crua utilizando a engine do Supabase configurada no topo
+    conn = engine.raw_connection()
     cursor = conn.cursor()
-    print("Conectado ao banco.")
+    print("Conectado ao banco na nuvem (Supabase).")
 
     # --- Vendedores ---
     vendedores = {}
@@ -152,7 +157,7 @@ def main():
         existing = cursor.fetchone()
 
         if existing:
-            # -- atualizacao
+            # -- Atualização
             lead_id = existing[0]
             cursor.execute("""
                 UPDATE leads SET
