@@ -7,15 +7,11 @@ import os
 st.set_page_config(page_title="CRM - Gestão de Leads", layout="wide")
 
 # Configurações do Banco manuProject
-DB_USER = "postgres"
-DB_PASS = quote_plus("danielDantas")  # Substitua pela sua senha
-DB_HOST = "localhost"
-DB_PORT = "5432"
-DB_NAME = "manuProject"
-
 @st.cache_resource
 def get_engine():
-    return create_engine(f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}")
+    # Lê a URL do Supabase configurada nos Secrets do Streamlit Cloud
+    db_url = st.secrets["postgres"]["url"]
+    return create_engine(db_url)
 
 engine = get_engine()
 
