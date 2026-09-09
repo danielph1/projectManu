@@ -110,6 +110,7 @@ def autenticar(login_input, senha_input):
                     "vendedor_id": result.vendedor_id,
                     "is_admin": is_admin
                 }
+                st.session_state["usuario_logado"] = result.nome
                 return True
     except Exception as e:
         st.error(f"Erro ao conectar para login: {e}")
