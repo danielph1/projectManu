@@ -5,7 +5,7 @@ from urllib.parse import quote_plus
 import os
 
 st.cache_data.clear()
-st.set_page_config(page_title="Manu Automoveis", layout="wide")
+st.set_page_config(page_title="CRM - Gestão de Leads", layout="wide")
 
 # Configurações do Banco manuProject
 @st.cache_resource
@@ -295,18 +295,15 @@ with st.sidebar:
     st.markdown("---")
     st.header("Navegação")
     
-# --- PAGINA DE LEAD ---
     btn_p_leads = "primary" if st.session_state["pagina_atual"] == "leads" else "secondary"
     if st.button("Painel de Leads", use_container_width=True, type=btn_p_leads):
         st.session_state["pagina_atual"] = "leads"
         st.rerun()
-
-# --- PAGINA DE VENDEDORES ---
+        
     btn_p_vendedores = "primary" if st.session_state["pagina_atual"] == "vendedores" else "secondary"
     if st.button("Equipe de Vendedores", use_container_width=True, type=btn_p_vendedores):
         st.session_state["pagina_atual"] = "vendedores"
         st.rerun()
-
 
     # Botão de Chat com Notificação Geral
     total_nao_lidas = contar_mensagens_nao_lidas(user.get('vendedor_id'))
@@ -324,63 +321,33 @@ with st.sidebar:
             st.session_state['abrir_formulario'] = True
             st.rerun()
 
-# --- PAGINA DE FICHAS PENDENTE ---
-    btn_p_ficha = "primary" if st.session_state["pagina_atual"] == "ficha_pendente" else "secondary"
-    if st.button("fichas pendentes", use_container_width=True, type=btn_p_vendedores):
-        st.session_state["pagina_atual"] = "ficha_pendente"
-        st.rerun()
-
-# --- PAGINA DE FICHA APROVADA ---
-    btn_p_ficha = "primary" if st.session_state["pagina_atual"] == "ficha_aprovada" else "secondary"
-    if st.button("fichas aprovada", use_container_width=True, type=btn_p_vendedores):
-        st.session_state["pagina_atual"] = "ficha_aprovada"
-        st.rerun()
-
-# --- PAGINA DE FICHA NEGADA ---
-    btn_p_ficha = "primary" if st.session_state["pagina_atual"] == "ficha_negada" else "secondary"
-    if st.button("fichas negadas", use_container_width=True, type=btn_p_vendedores):
-        st.session_state["pagina_atual"] = "ficha_negada"
-        st.rerun()
-
 # ==========================================
 # PÁGINA 1: PAINEL DE LEADS
 # ==========================================
 if st.session_state["pagina_atual"] == "leads":
     total_leads, total_fichas, total_aprovados, total_vendidos = 0, 0, 0, 0
     try:
-            # Se for admin, busca tudo. Se não for, filtra apenas pelo ID do vendedor logado
-            if user["is_admin"]:
-                query_metrics = text("""
-                    SELECT 
-                        COUNT(id) AS total_leads,
-                        COUNT(id) FILTER (WHERE gerou_ficha = TRUE) AS total_fichas,
-                        COUNT(id) FILTER (WHERE aprovou_credito = TRUE) AS total_aprovados,
-                        COUNT(id) FILTER (WHERE vendeu = TRUE OR venda_concluida = TRUE) AS total_vendas
-                    FROM public.leads
-                """)
-                params = {}
-            else:
-                query_metrics = text("""
-                    SELECT 
-                        COUNT(id) AS total_leads,
-                        COUNT(id) FILTER (WHERE gerou_ficha = TRUE) AS total_fichas,
-                        COUNT(id) FILTER (WHERE aprovou_credito = TRUE) AS total_aprovados,
-                        COUNT(id) FILTER (WHERE vendeu = TRUE OR venda_concluida = TRUE) AS total_vendas
-                    FROM public.leads
-                    WHERE vendedor_id = :vendedor_id
-                """)
-                params = {"vendedor_id": user["vendedor_id"]}
-
-            with engine.connect() as conn:
-                m_result = conn.execute(query_metrics, params).fetchone()
-                if m_result:
-                    total_leads = m_result[0] if m_result[0] is not None else 0
-                    total_fichas = m_result[1] if m_result[1] is not None else 0
-                    total_aprovados = m_result[2] if m_result[2] is not None else 0
-                    total_vendidos = m_result[3] if m_result[3] is not None else 0
-
+        query_metrics = text("""
+            SELECT 
+                    COUNT(id) AS total_leads,
+                    COUNT(id) FILTER (WHERE gerou_ficha = TRUE) AS total_fichas,
+                    COUNT(id) FILTER (WHERE aprovou_credito = TRUE) AS total_aprovados,
+                    COUNT(id) FILTER (WHERE vendeu = TRUE OR venda_concluida = TRUE) AS total_vendas
+                FROM public.leads
+            """)
+        with engine.connect() as conn:
+            m_result = conn.execute(query_metrics, {
+                "is_admin": user["is_admin"],
+                "vendedor_id": user["vendedor_id"]
+            }).fetchone()
+        if m_result:
+                total_leads = m_result[0] if m_result[0] is not None else 0
+                total_fichas = m_result[1] if m_result[1] is not None else 0
+                total_aprovados = m_result[2] if m_result[2] is not None else 0
+                total_vendidos = m_result[3] if m_result[3] is not None else 0
     except Exception as e:
         st.error(f"Erro nas métricas: {e}")
+        pass
 
     # Layout de topo: Cabeçalho + 4 Métricas (dividido em 5 colunas)
     col_header, col_m1, col_m2, col_m3, col_m4 = st.columns([1.8, 1, 1, 1, 1])
@@ -767,10 +734,3 @@ elif st.session_state["pagina_atual"] == "chat":
                             "msg": novo_texto.strip()
                         })
                     st.rerun()
-
-#========================================================================
-# SESSAO ELFEN AI
-#========================================================================
-if st.session_state.get("tipo_usuatio") == "elfenai":
-    if st.button("Botão exclusivo"):
-        st.success("aaaaaaaaa")
