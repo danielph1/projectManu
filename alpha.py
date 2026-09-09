@@ -362,7 +362,7 @@ if st.session_state["pagina_atual"] == "leads":
                 ORDER BY total_vendas DESC, total_aprovados DESC, total_leads DESC, v.nome ASC
             """)
         with engine.connect() as conn:
-            m_result = conn.execute(query_metrics, {
+            m_result = conn.execute(query_vendedores_stats, {
                 "is_admin": user["is_admin"],
                 "vendedor_id": user["vendedor_id"]
             }).fetchone()
