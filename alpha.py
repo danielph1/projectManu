@@ -151,7 +151,7 @@ def obter_vendedores():
 # ==========================================
 @st.dialog("Editar Lead")
 def editar_lead_modal(lead_data, df_vendedores):
-    user = st.session_state["usuario_logado"]
+    user = st.session_state.get("user", {})
     st.write(f"Editando informações de **{lead_data['nome_lead']}**")
     
     with st.form("form_edicao"):
