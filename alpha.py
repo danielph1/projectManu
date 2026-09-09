@@ -570,14 +570,13 @@ elif st.session_state["pagina_atual"] == "vendedores":
                 SELECT 
                     v.id,
                     v.nome,
-                    v.foto_url,
                     COUNT(l.id) AS total_leads,
                     COUNT(l.id) FILTER (WHERE l.gerou_ficha = TRUE) AS total_fichas,
                     COUNT(l.id) FILTER (WHERE l.aprovou_credito = TRUE) AS total_aprovados,
                     COUNT(l.id) FILTER (WHERE l.vendeu = TRUE OR l.venda_concluida = TRUE) AS total_vendas
                 FROM public.vendedores v
                 LEFT JOIN public.leads l ON l.vendedor_id = v.id
-                GROUP BY v.id, v.nome, v.foto_url
+                GROUP BY v.id, v.nome
                 ORDER BY total_vendas DESC, total_aprovados DESC, total_leads DESC, v.nome ASC
             """)
         
