@@ -557,7 +557,7 @@ if st.session_state["pagina_atual"] == "leads":
 # PÁGINA 2: EQUIPE DE VENDEDORES
 # ==========================================
 elif st.session_state["pagina_atual"] == "vendedores":
-    st.title("👥 Equipe de Vendedores")
+    st.title("Equipe de Vendedores")
     st.markdown("Confira o desempenho geral e interaja com a equipe.")
     st.markdown("---")
 
