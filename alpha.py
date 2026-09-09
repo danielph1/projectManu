@@ -307,6 +307,12 @@ with st.sidebar:
         st.session_state["pagina_atual"] = "vendedores"
         st.rerun()
 
+# --- PAGINA DE FICHAS ---
+    btn_p_ficha = "primary" if st.session_state["pagina_atual"] == "ficha_pendente" else "secondary"
+    if st.button("fichas pendentes", use_container_width=True, type=btn_p_vendedores):
+        st.session_state["pagina_atual"] = "ficha_pendente"
+        st.rerun()
+
     # Botão de Chat com Notificação Geral
     total_nao_lidas = contar_mensagens_nao_lidas(user.get('vendedor_id'))
     label_chat = f"Central de Chat" + (f" 🔴 ({total_nao_lidas})" if total_nao_lidas > 0 else "")
