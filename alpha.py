@@ -4,6 +4,7 @@ from sqlalchemy import create_engine, text
 from urllib.parse import quote_plus
 import os
 
+st.cache_data.clear()
 st.set_page_config(page_title="CRM - Gestão de Leads", layout="wide")
 
 # Configurações do Banco manuProject
