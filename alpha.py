@@ -295,11 +295,13 @@ with st.sidebar:
     st.markdown("---")
     st.header("Navegação")
     
+# --- PAGINA DE LEAD ---
     btn_p_leads = "primary" if st.session_state["pagina_atual"] == "leads" else "secondary"
     if st.button("Painel de Leads", use_container_width=True, type=btn_p_leads):
         st.session_state["pagina_atual"] = "leads"
         st.rerun()
-        
+
+# --- PAGINA DE VENDEDORES ---
     btn_p_vendedores = "primary" if st.session_state["pagina_atual"] == "vendedores" else "secondary"
     if st.button("Equipe de Vendedores", use_container_width=True, type=btn_p_vendedores):
         st.session_state["pagina_atual"] = "vendedores"
@@ -320,7 +322,7 @@ with st.sidebar:
         if st.button("➕ Adicionar Novo Lead", use_container_width=True):
             st.session_state['abrir_formulario'] = True
             st.rerun()
-
+# ---------
 # ==========================================
 # PÁGINA 1: PAINEL DE LEADS
 # ==========================================
