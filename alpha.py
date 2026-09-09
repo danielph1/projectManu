@@ -348,13 +348,18 @@ with st.sidebar:
 if st.session_state["pagina_atual"] == "leads":
     total_leads, total_fichas, total_aprovados, total_vendidos = 0, 0, 0, 0
     try:
-        query_metrics = text("""
-            SELECT 
-                    COUNT(id) AS total_leads,
-                    COUNT(id) FILTER (WHERE gerou_ficha = TRUE) AS total_fichas,
-                    COUNT(id) FILTER (WHERE aprovou_credito = TRUE) AS total_aprovados,
-                    COUNT(id) FILTER (WHERE vendeu = TRUE OR venda_concluida = TRUE) AS total_vendas
-                FROM public.leads
+        query_vendedores_stats = text("""
+                SELECT 
+                    v.id,
+                    v.nome,
+                    COUNT(l.id) AS total_leads,
+                    COUNT(l.id) FILTER (WHERE l.gerou_ficha = TRUE) AS total_fichas,
+                    COUNT(l.id) FILTER (WHERE l.aprovou_credito = TRUE) AS total_aprovados,
+                    COUNT(l.id) FILTER (WHERE l.vendeu = TRUE OR l.venda_concluida = TRUE) AS total_vendas
+                FROM public.vendedores v
+                LEFT JOIN public.leads l ON l.vendedor_id = v.id
+                GROUP BY v.id, v.nome
+                ORDER BY total_vendas DESC, total_aprovados DESC, total_leads DESC, v.nome ASC
             """)
         with engine.connect() as conn:
             m_result = conn.execute(query_metrics, {
