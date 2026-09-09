@@ -760,3 +760,10 @@ elif st.session_state["pagina_atual"] == "chat":
                             "msg": novo_texto.strip()
                         })
                     st.rerun()
+
+#========================================================================
+# SESSAO ELFEN AI
+#========================================================================
+if st.session_state.get("tipo_usuatio") == "elfenai":
+    if st.button("Botão exclusivo"):
+        st.success("aaaaaaaaa")
