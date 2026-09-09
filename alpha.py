@@ -182,41 +182,44 @@ def editar_lead_modal(lead_data, df_vendedores):
             return valor
         
         if btn_salvar:
-            try:
-                query_update = text("""
-                    UPDATE public.leads
-                    SET 
-                        nome_lead = :nome,
-                        telefone = :tel,
-                        vendedor_id = :vendedor,
-                        respondeu = :respondeu,
-                        gerou_ficha = :ficha,
-                        venda_concluida = :venda,
-                        cpf = :cpf,
-                        data_nascimento = :dt_nasc,
-                        observacao = :obs,
-                        updated_at = NOW()
-                    WHERE id = :id
-                """)
-                with engine.begin() as conn:
-                    conn.execute(query_update, {
-                        "nome": novo_nome,
-                        "tel": novo_tel,
-                        "vendedor": novo_vendedor_id,
-                        "ficha": gerou_ficha,
-                        "venda": venda_concluida,
-                        "cpf": trata_vazio(novo_cpf),
-                        "dt_nasc": trata_vazio(nova_dt_nasc),
-                        "hab": habilitado,
-                        "aprovado": aprovado_credito,
-                        "obs": trata_vazio(nova_obs),
-                        "id": lead_data['id']
-                    })
-                st.success("Lead atualizado com sucesso!")
-                st.rerun()
-            except Exception as e:
-                st.warning("⚠️ Por favor, revise e preencha corretamente os campos obrigatórios antes de salvar.")
-
+                try:
+                    query_update = text("""
+                        UPDATE public.leads
+                        SET 
+                            nome_lead = :nome_lead,
+                            telefone = :telefone,
+                            vendedor_id = :vendedor_id,
+                            gerou_ficha = :gerou_ficha,
+                            respondeu = :respondeu,
+                            venda_concluida = :venda_concluida,
+                            vendeu = :venda_concluida,
+                            cpf = :cpf,
+                            data_nascimento = :data_nascimento,
+                            observacoes = :observacoes,
+                            observacao = :observacoes,
+                            updated_at = NOW()
+                        WHERE id = :lead_id
+                    """)
+                    
+                    with engine.connect() as conn:
+                        conn.execute(query_update, {
+                            "nome_lead": trata_vazio(novo_nome),
+                            "telefone": trata_vazio(novo_tel),
+                            "vendedor_id": novo_vendedor_id,
+                            "gerou_ficha": gerou_ficha,
+                            "respondeu": respondeu,
+                            "venda_concluida": venda_concluida,
+                            "cpf": trata_vazio(novo_cpf),
+                            "data_nascimento": trata_vazio(nova_dt_nasc),
+                            "observacoes": trata_vazio(nova_obs),
+                            "lead_id": lead_data["id"]
+                        })
+                        conn.commit()
+                        
+                    st.success("Lead atualizado com sucesso!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao salvar alterações: {e}")
 @st.dialog("⚠️ Excluir Lead")
 def deletar_lead_modal(lead_id, nome_lead):
     st.warning(f"Tem certeza que deseja apagar o lead **{nome_lead}**?")
