@@ -331,15 +331,15 @@ with st.sidebar:
             st.rerun()
 
 # --- SIDEBAR PRINCIPAL DO STREAMLIT ---
-## with st.sidebar:
-##    st.markdown(f"### 👤 Logado como:\n**{user['nome']}**")
-##    st.caption(f"Perfil: {user['tipo'].upper()}")
-##    
-##    if st.button("Sair (Logout)", use_container_width=True):
-##        logout()
-##        
-##    st.markdown("---")
-##    st.header("Navegação")
+with st.sidebar:
+    st.markdown(f"### 👤 Logado como:\n**{user['nome']}**")
+    st.caption(f"Perfil: {user['tipo'].upper()}")
+    
+    if st.button("Sair (Logout)", use_container_width=True):
+        logout()
+        
+    st.markdown("---")
+    st.header("Navegação")
     
 # --- PAGINA DE LEAD ---
     btn_p_leads = "primary" if st.session_state["pagina_atual"] == "leads" else "secondary"
