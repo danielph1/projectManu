@@ -283,7 +283,8 @@ if st.session_state["usuario_logado"] is None:
 # ==========================================
 # 2. SISTEMA PRINCIPAL (APÓS LOGIN)
 # ==========================================
-user = st.session_state["usuario_logado"]
+user = st.session_state.get("user", {})
+tipo_usuario = user.get("tipo", "vendedor")
 
 # --- SIDEBAR PRINCIPAL DO STREAMLIT ---
 with st.sidebar:
