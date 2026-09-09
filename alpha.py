@@ -2,8 +2,15 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
 from urllib.parse import quote_plus
-from views import leads, elfenai, documentos, financeiro
+
 import os
+
+# Adiciona a pasta atual ao path do Python para garantir que ele encontre a pasta views
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
+from views import leads, elfenai, documentacao, financeiro
 
 st.cache_data.clear()
 st.set_page_config(page_title="Manu Automoveis", layout="wide")
