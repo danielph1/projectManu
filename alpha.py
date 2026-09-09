@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
 from urllib.parse import quote_plus
+import os
 
 st.set_page_config(page_title="CRM - Gestão de Leads", layout="wide")
 
@@ -323,7 +324,7 @@ if st.session_state["pagina_atual"] == "leads":
                 COUNT(*) AS total,
                 COUNT(*) FILTER (WHERE gerou_ficha = TRUE) AS fichas,
                 COUNT(*) FILTER (WHERE aprovou_credito = TRUE) AS aprovados,
-                COUNT(*) FILTER (WHERE venda_concluida = TRUE) AS vendidos
+                COUNT(*) FILTER (WHERE venda_concluidaR = TRUE) AS vendidos
             FROM public.leads
             WHERE (:is_admin = TRUE OR vendedor_id = :vendedor_id)
         """)
