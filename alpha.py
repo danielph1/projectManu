@@ -589,16 +589,10 @@ elif st.session_state["pagina_atual"] == "vendedores":
             cols_v = st.columns(3)
             for idx, row_v in df_vend.iterrows():
 
-                for idx, row_v in df_vend.iterrows():
-                        with st.container(border=True):
-                            foto = row_v.get('foto_url') if 'foto_url' in row_v and pd.notnull(row_v.get('foto_url')) and row_v['foto_url'] != "" else "https://cdn-icons-png.flaticon.com/512/149/149071.png"
-                            
-                            col_img, col_nome = st.columns([1, 2])
-                            with col_img:
-                                st.image(foto, width=80)
-                            with col_nome:
-                                st.markdown(f"### {row_v['nome']}")
-                                
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Leads", int(row_v.get("total_leads", 0)))
+                m2.metric("Fichas", int(row_v.get("total_fichas", 0)))
+                m3.metric("Aprovados", int(row_v.get("total_aprovados", 0)))
                 m4.metric("Vendas", int(row_v.get("total_vendas", 0)))
 
                 with cols_v[idx % 3]:
