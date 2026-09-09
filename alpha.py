@@ -348,6 +348,49 @@ with st.sidebar:
 # PÁGINA 1: PAINEL DE LEADS
 # ==========================================
 if st.session_state["pagina_atual"] == "leads":
+
+    #--------ELFENAI-----------------
+    user = st.session_state.get("user", {})
+    tipo_usuario = user.get("tipo", "vendedor")
+
+    # Se for elfenai, ajustamos as métricas para o fluxo dele
+    if tipo_usuario == "elfenai":
+        st.title("Painel de Controle - Fichas")
+        
+        # Exemplo de métricas focadas em análise de fichas
+        try:
+            query_elfenai_stats = text("""
+                SELECT 
+                    COUNT(id) FILTER (WHERE gerou_ficha = TRUE AND aprovou_credito IS NULL) AS pendentes,
+                    COUNT(id) FILTER (WHERE aprovou_credito = TRUE) AS aprovadas,
+                    COUNT(id) FILTER (WHERE aprovou_credito = FALSE) AS negadas
+                FROM public.leads
+            """)
+            with engine.connect() as conn:
+                res_elf = conn.execute(query_elfenai_stats).fetchone()
+                p_fichas = res_elf[0] if res_elf and res_elf[0] is not None else 0
+                a_fichas = res_elf[1] if res_elf and res_elf[1] is not None else 0
+                n_fichas = res_elf[2] if res_elf and res_elf[2] is not None else 0
+        except Exception as e:
+            st.error(f"Erro ao carregar métricas: {e}")
+            p_fichas, a_fichas, n_fichas = 0, 0, 0
+
+        # Layout de métricas exclusivo para o Elfenai
+        col_e1, col_e2, col_e3 = st.columns(3)
+        with col_e1:
+            st.metric("Fichas Pendentes", p_fichas)
+        with col_e2:
+            st.metric("Fichas Aprovadas", a_fichas)
+        with col_e3:
+            st.metric("Fichas Negadas", n_fichas)
+            
+    else:
+        # --- AQUI FICA O SEU CÓDIGO ATUAL DE LEADS (Admin / Vendedor) ---
+        total_leads, total_fichas, total_aprovados, total_vendidos = 0, 0, 0, 0
+        # ... (todo o seu bloco atual de col_header, col_m1, col_m2, etc.)
+
+#  -----------VENDEDORES-----------
+
     total_leads, total_fichas, total_aprovados, total_vendidos = 0, 0, 0, 0
 
     # Layout de topo: Cabeçalho + 4 Métricas (dividido em 5 colunas)
