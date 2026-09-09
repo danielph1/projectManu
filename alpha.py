@@ -325,13 +325,12 @@ if st.session_state["pagina_atual"] == "leads":
     try:
         query_metrics = text("""
             SELECT 
-                COUNT(*) AS total,
-                COUNT(*) FILTER (WHERE gerou_ficha = TRUE) AS fichas,
-                COUNT(*) FILTER (WHERE aprovou_credito = TRUE) AS aprovados,
-                COUNT(*) FILTER (WHERE venda_concluidaR = TRUE) AS vendidos
-            FROM public.leads
-            WHERE (:is_admin = TRUE OR vendedor_id = :vendedor_id)
-        """)
+                    COUNT(id) AS total_leads,
+                    COUNT(id) FILTER (WHERE gerou_ficha = TRUE) AS total_fichas,
+                    COUNT(id) FILTER (WHERE aprovou_credito = TRUE) AS total_aprovados,
+                    COUNT(id) FILTER (WHERE vendeu = TRUE OR venda_concluida = TRUE) AS total_vendas
+                FROM public.leads
+            """)
         with engine.connect() as conn:
             m_result = conn.execute(query_metrics, {
                 "is_admin": user["is_admin"],
