@@ -5,7 +5,7 @@ from urllib.parse import quote_plus
 import os
 
 st.cache_data.clear()
-st.set_page_config(page_title="CRM - Gestão de Leads", layout="wide")
+st.set_page_config(page_title="Manu Automoveis", layout="wide")
 
 # Configurações do Banco manuProject
 @st.cache_resource
