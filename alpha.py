@@ -584,7 +584,15 @@ elif st.session_state["pagina_atual"] == "vendedores":
         else:
             cols_v = st.columns(3)
             for idx, row_v in df_vend.iterrows():
+
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Leads", int(row_v.get("total_leads", 0)))
+                m2.metric("Fichas", int(row_v.get("total_fichas", 0)))
+                m3.metric("Aprovados", int(row_v.get("total_aprovados", 0)))
+                m4.metric("Vendas", int(row_v.get("total_vendas", 0)))
+
                 with cols_v[idx % 3]:
+                    
                     with st.container(border=True):
                         foto = row_v['foto_url'] if pd.notnull(row_v['foto_url']) and row_v['foto_url'] != "" else "https://cdn-icons-png.flaticon.com/512/3135/3135715.png"
                         
