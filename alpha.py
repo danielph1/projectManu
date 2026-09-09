@@ -340,11 +340,11 @@ if st.session_state["pagina_atual"] == "leads":
                 "is_admin": user["is_admin"],
                 "vendedor_id": user["vendedor_id"]
             }).fetchone()
-            if m_result:
-                total_leads = m_result.total
-                total_fichas = m_result.fichas
-                total_aprovados = m_result.aprovados
-                total_vendidos = m_result.vendidos
+        if m_result:
+                total_leads = m_result[0] if m_result[0] is not None else 0
+                total_fichas = m_result[1] if m_result[1] is not None else 0
+                total_aprovados = m_result[2] if m_result[2] is not None else 0
+                total_vendidos = m_result[3] if m_result[3] is not None else 0
     except Exception as e:
         st.error(f"Erro nas métricas: {e}")
         pass
