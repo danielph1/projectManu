@@ -124,9 +124,17 @@ def logout():
 def obter_vendedores():
     try:
         with engine.connect() as conn:
+            # Tenta buscar com a foto_url caso a coluna exista
             return pd.read_sql_query("SELECT id, nome, foto_url FROM public.vendedores ORDER BY nome", conn)
     except Exception:
-        return pd.DataFrame(columns=["id", "nome", "foto_url"])
+        try:
+            # Fallback caso a tabela só tenha id e nome
+            with engine.connect() as conn:
+                df = pd.read_sql_query("SELECT id, nome FROM public.vendedores ORDER BY nome", conn)
+                df["foto_url"] = None
+                return df
+        except Exception:
+            return pd.DataFrame(columns=["id", "nome", "foto_url"])
 
 # ==========================================
 # MODAIS / DIALOGS (ESCOPO GLOBAL)
@@ -508,11 +516,11 @@ if st.session_state["pagina_atual"] == "leads":
                         st.write(f"**Ficha Gerada:** {'Sim' if row['gerou_ficha'] else 'Não'}")
                         
                         if pd.notnull(row['observacao']) and row['observacao'] != "":
-                            st.info(f"📝 **Obs:** {row['observacao']}")
+                            st.info(f"**Obs:** {row['observacao']}")
 
                         with st.expander("Gerenciar / Ver Ficha"):
                             if row['gerou_ficha']:
-                                st.markdown("##### 📝 Dados da Ficha")
+                                st.markdown("##### Dados da Ficha")
                                 st.write(f"**CPF:** {row['cpf'] if row['cpf'] else 'Não informado'}")
                                 st.write(f"**Data Nasc.:** {row['data_nascimento'] if row['data_nascimento'] else 'Não informada'}")
                                 st.write(f"**Habilitado:** {'Sim' if row['habilitado'] else 'Não'}")
