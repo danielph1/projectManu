@@ -286,10 +286,9 @@ if st.session_state["usuario_logado"] is None:
 user = st.session_state.get("user", {})
 tipo_usuario = user.get("tipo", "vendedor")
 
-# --- SIDEBAR PRINCIPAL DO STREAMLIT ---
 with st.sidebar:
-    st.markdown(f"### 👤 Logado como:\n**{user['nome']}**")
-    st.caption(f"Perfil: {user['tipo'].upper()}")
+    st.markdown(f"### 👤 Logado como:\n**{user.get('nome', '')}**")
+    st.caption(f"Perfil: {tipo_usuario.upper()}")
     
     if st.button("Sair (Logout)", use_container_width=True):
         logout()
