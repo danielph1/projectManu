@@ -598,7 +598,7 @@ elif st.session_state["pagina_atual"] == "vendedores":
                 with cols_v[idx % 3]:
 
                     with st.container(border=True):
-                        foto = row_v['foto_url'] if pd.notnull(row_v['foto_url']) and row_v['foto_url'] != "" else "https://cdn-icons-png.flaticon.com/512/3135/3135715.png"
+                        foto = row_v.get('foto_url') if 'foto_url' in row_v and pd.notnull(row_v['foto_url']) and row_v['foto_url'] != "" else "https://cdn-icons-png.flaticon.com/512/149/149071.png"
                         
                         col_img, col_nome = st.columns([1, 2])
                         with col_img:
