@@ -307,11 +307,6 @@ with st.sidebar:
         st.session_state["pagina_atual"] = "vendedores"
         st.rerun()
 
-# --- PAGINA DE FICHAS ---
-    btn_p_ficha = "primary" if st.session_state["pagina_atual"] == "ficha_pendente" else "secondary"
-    if st.button("fichas pendentes", use_container_width=True, type=btn_p_vendedores):
-        st.session_state["pagina_atual"] = "ficha_pendente"
-        st.rerun()
 
     # Botão de Chat com Notificação Geral
     total_nao_lidas = contar_mensagens_nao_lidas(user.get('vendedor_id'))
@@ -328,7 +323,25 @@ with st.sidebar:
         if st.button("➕ Adicionar Novo Lead", use_container_width=True):
             st.session_state['abrir_formulario'] = True
             st.rerun()
-# ---------
+
+# --- PAGINA DE FICHAS PENDENTE ---
+    btn_p_ficha = "primary" if st.session_state["pagina_atual"] == "ficha_pendente" else "secondary"
+    if st.button("fichas pendentes", use_container_width=True, type=btn_p_vendedores):
+        st.session_state["pagina_atual"] = "ficha_pendente"
+        st.rerun()
+
+# --- PAGINA DE FICHA APROVADA ---
+    btn_p_ficha = "primary" if st.session_state["pagina_atual"] == "ficha_aprovada" else "secondary"
+    if st.button("fichas aprovada", use_container_width=True, type=btn_p_vendedores):
+        st.session_state["pagina_atual"] = "ficha_aprovada"
+        st.rerun()
+
+# --- PAGINA DE FICHA NEGADA ---
+    btn_p_ficha = "primary" if st.session_state["pagina_atual"] == "ficha_negada" else "secondary"
+    if st.button("fichas negadas", use_container_width=True, type=btn_p_vendedores):
+        st.session_state["pagina_atual"] = "ficha_negada"
+        st.rerun()
+
 # ==========================================
 # PÁGINA 1: PAINEL DE LEADS
 # ==========================================
