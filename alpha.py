@@ -184,10 +184,10 @@ tipo_usuario = user.get("tipo", "vendedor")
 
 # Roteador central para os arquivos da pasta views
 if tipo_usuario == "elfenai":
-    elfenai.renderizar(user)
+    elfenai.renderizar(user, engine)
 elif tipo_usuario == "documentacao":
-    documentacao.renderizar(user)
+    documentacao.renderizar(user, engine)
 elif tipo_usuario == "financeiro":
-    financeiro.renderizar(user)
+    financeiro.renderizar(user, engine)
 else:
-    leads.renderizar(user)
+    leads.renderizar(user, engine, contar_mensagens_nao_lidas)

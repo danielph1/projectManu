@@ -1,8 +1,14 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import text
+import sys
+import os
+# Adiciona o diretório raiz ao path se necessário
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from alpha import contar_mensagens_nao_lidas
 
-def renderizar(user):
+
+def renderizar(user, engine, contar_mensagens_nao_lidas):
     # Aqui dentro vai todo o código gigante que você colou da linha 290 em diante
     tipo_usuario = user.get("tipo", "vendedor")
     with st.sidebar:
