@@ -295,10 +295,12 @@ if st.session_state["usuario_logado"] is None:
 user = st.session_state.get("user", {})
 tipo_usuario = user.get("tipo", "vendedor")
 
-
-#========================================================================
-# SESSAO ELFEN AI
-#========================================================================
-if st.session_state.get("tipo_usuatio") == "elfenai":
-    if st.button("Botão exclusivo"):
-        st.success("aaaaaaaaa")
+# Roteador central para os arquivos da pasta views
+if tipo_usuario == "elfenai":
+    elfenai.renderizar(user)
+elif tipo_usuario == "documentacao":
+    documentacao.renderizar(user)
+elif tipo_usuario == "financeiro":
+    financeiro.renderizar(user)
+else:
+    leads.renderizar(user)
