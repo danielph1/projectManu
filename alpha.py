@@ -73,7 +73,7 @@ def marcar_mensagens_como_lidas(meu_id, outro_id):
             WHERE destinatario_id = :meu_id AND remetente_id = :outro_id AND lida = FALSE
         """)
         with engine.begin() as conn:
-            conn.execute(query, {"meu_id": meu_id, "outro_id": outro_id})
+            conn.execute(query, {"remetente_id": meu_id, "destinatario_id": outro_id})
     except Exception:
         pass
 
