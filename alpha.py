@@ -303,7 +303,8 @@ with st.sidebar:
 
 # --- PAGINA DE VENDEDORES ---
     btn_p_vendedores = "primary" if st.session_state["pagina_atual"] == "vendedores" else "secondary"
-    if st.button("Equipe de Vendedores", use_container_width=True, type=btn_p_vendedores):
+    if st.button("Equipe de Vendedores", use_container_width=True, type=btn_p_vendedores,
+                 disable = not user["vendedor"]):
         st.session_state["pagina_atual"] = "vendedores"
         st.rerun()
 
