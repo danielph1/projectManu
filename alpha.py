@@ -241,8 +241,8 @@ def deletar_lead_modal(lead_id, nome_lead):
 @st.dialog("🖼️ Alterar Foto de Perfil")
 def editar_foto_modal(vendedor_id, nome_vendedor, foto_atual):
     st.write(f"Atualizar foto de **{nome_vendedor}**")
-#    nova_foto = st.text_input("URL da Imagem (Link)", value=foto_atual if foto_atual else "")
-    st.caption("Exemplo: https://sua-imagem.com/foto.jpg")
+    nova_foto = st.text_input("URL da Imagem (Link)", value=foto_atual if foto_atual else "")
+#    st.caption("Exemplo: https://sua-imagem.com/foto.jpg")
     
     if st.button("Salvar Foto", use_container_width=True, type="primary", disabled=not user["is_admin"]):
         try:
