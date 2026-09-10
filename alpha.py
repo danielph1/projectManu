@@ -298,7 +298,6 @@ with st.sidebar:
 # --- PAGINA DE LEAD ---
     btn_p_leads = "primary" if st.session_state["pagina_atual"] == "leads" else "secondary"
     if st.button("Painel de Leads", use_container_width=True, type=btn_p_leads):
-        disable = not user["vendedor"]
         st.session_state["pagina_atual"] = "leads"
         st.rerun()
 
