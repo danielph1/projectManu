@@ -244,7 +244,7 @@ def editar_foto_modal(vendedor_id, nome_vendedor, foto_atual):
     nova_foto = st.text_input("URL da Imagem (Link)", value=foto_atual if foto_atual else "")
     st.caption("Exemplo: https://sua-imagem.com/foto.jpg")
     
-    if st.button("Salvar Foto", use_container_width=True, type="primary", disable = not user["admin"]):
+    if st.button("Salvar Foto", use_container_width=True, type="primary", disabled=not user["is_admin"]):
         try:
             query_foto = text("UPDATE public.vendedores SET foto_url = :foto WHERE id = :id")
             with engine.begin() as conn:
