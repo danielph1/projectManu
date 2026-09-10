@@ -16,6 +16,67 @@ def get_engine():
 
 engine = get_engine()
 
+# --- INFRAESTRUTURA DE MENSAGENS (BANCO DE DADOS) ---
+def inicializar_banco_chat():
+    """Garante que a tabela de chat e a coluna 'lida' existam."""
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS public.chat_mensagens (
+                    id SERIAL PRIMARY KEY,
+                    remetente_id INT NOT NULL,
+                    destinatario_id INT NOT NULL,
+                    mensagem TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    lida BOOLEAN DEFAULT FALSE
+                );
+            """))
+            conn.execute(text("""
+                ALTER TABLE public.chat_mensagens 
+                ADD COLUMN IF NOT EXISTS lida BOOLEAN DEFAULT FALSE;
+            """))
+    except Exception as e:
+        st.error(f"Erro ao inicializar estrutura de chat no banco: {e}")
+
+inicializar_banco_chat()
+
+# --- FUNÇÕES DE CHAT / NOTIFICAÇÕES ---
+def contar_mensagens_nao_lidas(vendedor_id, remetente_id=None):
+    if not vendedor_id:
+        return 0
+    try:
+        if remetente_id:
+            query = text("""
+                SELECT COUNT(*) FROM public.chat_mensagens 
+                WHERE destinatario_id = :meu_id AND remetente_id = :remetente_id AND lida = FALSE
+            """)
+            params = {"meu_id": vendedor_id, "remetente_id": remetente_id}
+        else:
+            query = text("""
+                SELECT COUNT(*) FROM public.chat_mensagens 
+                WHERE destinatario_id = :meu_id AND lida = FALSE
+            """)
+            params = {"meu_id": vendedor_id}
+            
+        with engine.connect() as conn:
+            return conn.execute(query, params).scalar() or 0
+    except Exception:
+        return 0
+
+def marcar_mensagens_como_lidas(meu_id, outro_id):
+    if not meu_id or not outro_id:
+        return
+    try:
+        query = text("""
+            UPDATE public.chat_mensagens 
+            SET lida = TRUE 
+            WHERE destinatario_id = :meu_id AND remetente_id = :outro_id AND lida = FALSE
+        """)
+        with engine.begin() as conn:
+            conn.execute(query, {"remetente_id": meu_id, "destinatario_id": outro_id})
+    except Exception:
+        pass
+
 # --- GERENCIAMENTO DE SESSÃO / AUTENTICAÇÃO ---
 if "usuario_logado" not in st.session_state:
     st.session_state["usuario_logado"] = None
@@ -706,64 +767,3 @@ elif st.session_state["pagina_atual"] == "chat":
 if st.session_state.get("tipo_usuatio") == "elfenai":
     if st.button("Botão exclusivo"):
         st.success("aaaaaaaaa")
-
-# --- INFRAESTRUTURA DE MENSAGENS (BANCO DE DADOS) ---
-def inicializar_banco_chat():
-    """Garante que a tabela de chat e a coluna 'lida' existam."""
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS public.chat_mensagens (
-                    id SERIAL PRIMARY KEY,
-                    remetente_id INT NOT NULL,
-                    destinatario_id INT NOT NULL,
-                    mensagem TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT NOW(),
-                    lida BOOLEAN DEFAULT FALSE
-                );
-            """))
-            conn.execute(text("""
-                ALTER TABLE public.chat_mensagens 
-                ADD COLUMN IF NOT EXISTS lida BOOLEAN DEFAULT FALSE;
-            """))
-    except Exception as e:
-        st.error(f"Erro ao inicializar estrutura de chat no banco: {e}")
-
-inicializar_banco_chat()
-
-# --- FUNÇÕES DE CHAT / NOTIFICAÇÕES ---
-def contar_mensagens_nao_lidas(vendedor_id, remetente_id=None):
-    if not vendedor_id:
-        return 0
-    try:
-        if remetente_id:
-            query = text("""
-                SELECT COUNT(*) FROM public.chat_mensagens 
-                WHERE destinatario_id = :meu_id AND remetente_id = :remetente_id AND lida = FALSE
-            """)
-            params = {"meu_id": vendedor_id, "remetente_id": remetente_id}
-        else:
-            query = text("""
-                SELECT COUNT(*) FROM public.chat_mensagens 
-                WHERE destinatario_id = :meu_id AND lida = FALSE
-            """)
-            params = {"meu_id": vendedor_id}
-            
-        with engine.connect() as conn:
-            return conn.execute(query, params).scalar() or 0
-    except Exception:
-        return 0
-
-def marcar_mensagens_como_lidas(meu_id, outro_id):
-    if not meu_id or not outro_id:
-        return
-    try:
-        query = text("""
-            UPDATE public.chat_mensagens 
-            SET lida = TRUE 
-            WHERE destinatario_id = :meu_id AND remetente_id = :outro_id AND lida = FALSE
-        """)
-        with engine.begin() as conn:
-            conn.execute(query, {"remetente_id": meu_id, "destinatario_id": outro_id})
-    except Exception:
-        pass
