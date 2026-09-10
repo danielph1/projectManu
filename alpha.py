@@ -242,7 +242,7 @@ def deletar_lead_modal(lead_id, nome_lead):
 def editar_foto_modal(vendedor_id, nome_vendedor, foto_atual):
     st.write(f"Atualizar foto de **{nome_vendedor}**")
     nova_foto = st.text_input("URL da Imagem (Link)", value=foto_atual if foto_atual else "")
-#    st.caption("Exemplo: https://sua-imagem.com/foto.jpg")
+    st.caption("Exemplo: https://sua-imagem.com/foto.jpg")
     
     if st.button("Salvar Foto", use_container_width=True, type="primary", disabled=not user["is_admin"]):
         try:
@@ -332,7 +332,7 @@ with st.sidebar:
 
 # --- PAGINA DE FICHA APROVADA ---
     btn_p_ficha = "primary" if st.session_state["pagina_atual"] == "ficha_aprovada" else "secondary"
-    if st.button("fichas aprovada", use_container_width=True, type=btn_p_vendedores):
+    if st.button("fichas aprovada", use_container_width=True, type=btn_p_vendedores, disabled=not user["is_admin"]):
         st.session_state["pagina_atual"] = "ficha_aprovada"
         st.rerun()
 
