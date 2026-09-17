@@ -65,6 +65,8 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "view_tasks",
         "respond_tasks",
         "view_goals",
+        "view_credit_fichas",
+        "edit_own_credit_data",
     },
     "gerente": {
         # O gerente é o superadministrador operacional da loja.
@@ -77,6 +79,10 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "view_tasks",
         "respond_tasks",
         "view_goals",
+        "view_credit_fichas",
+        "edit_bank_results",
+        "edit_sales_boleto",
+        "view_credit_metrics",
     },
     "financeiro": {
         "view_leads",
@@ -84,6 +90,9 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "view_tasks",
         "respond_tasks",
         "view_goals",
+        "view_credit_fichas",
+        "edit_sales_boleto",
+        "view_credit_metrics",
     },
     "documentista": {
         "view_leads",
@@ -91,6 +100,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "view_tasks",
         "respond_tasks",
         "view_goals",
+        "view_credit_fichas",
     },
 }
 
@@ -721,6 +731,672 @@ def converter_data(valor: Any) -> date:
     return pd.to_datetime(valor).date()
 
 
+def numero_seguro(valor: Any, padrao: float = 0.0) -> float:
+    if valor is None or pd.isna(valor):
+        return padrao
+    return float(valor)
+
+
+def inteiro_seguro(valor: Any, padrao: int = 1) -> int:
+    if valor is None or pd.isna(valor):
+        return padrao
+    return int(valor)
+
+
+BANCOS_CREDITO = [
+    "Itau",
+    "Bradesco",
+    "Santander",
+    "Safra",
+    "Creditas",
+    "BV",
+    "Pan",
+]
+
+
+def contar_notificacoes_nao_lidas(usuario_id: int) -> int:
+    query = text(
+        """
+        SELECT COUNT(*)
+        FROM public.notificacoes
+        WHERE usuario_id = :usuario_id
+          AND lida = FALSE
+        """
+    )
+
+    try:
+        with engine.connect() as conn:
+            return int(
+                conn.execute(query, {"usuario_id": usuario_id}).scalar()
+                or 0
+            )
+    except Exception:
+        return 0
+
+
+def marcar_notificacoes_como_lidas(usuario_id: int) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE public.notificacoes
+                SET lida = TRUE
+                WHERE usuario_id = :usuario_id
+                  AND lida = FALSE
+                """
+            ),
+            {"usuario_id": usuario_id},
+        )
+
+
+def criar_notificacao_vendedor(
+    vendedor_id: Optional[int],
+    ficha_id: int,
+    titulo: str,
+    mensagem: str,
+    conn: Any,
+) -> None:
+    if not vendedor_id:
+        return
+
+    usuario = conn.execute(
+        text(
+            """
+            SELECT id
+            FROM public.usuarios
+            WHERE vendedor_id = :vendedor_id
+              AND COALESCE(ativo, TRUE) = TRUE
+            ORDER BY id
+            LIMIT 1
+            """
+        ),
+        {"vendedor_id": vendedor_id},
+    ).mappings().first()
+
+    if not usuario:
+        return
+
+    conn.execute(
+        text(
+            """
+            INSERT INTO public.notificacoes (
+                usuario_id,
+                tipo,
+                titulo,
+                mensagem,
+                ficha_id
+            )
+            VALUES (
+                :usuario_id,
+                'resultado_ficha',
+                :titulo,
+                :mensagem,
+                :ficha_id
+            )
+            """
+        ),
+        {
+            "usuario_id": usuario["id"],
+            "titulo": titulo,
+            "mensagem": mensagem,
+            "ficha_id": ficha_id,
+        },
+    )
+
+
+def criar_ficha_credito(
+    conn: Any,
+    lead_id: int,
+    vendedor_id: Optional[int],
+    valor_entrada: float,
+    usuario_id: int,
+) -> int:
+    """
+    Cria a ficha uma única vez e inicializa os sete bancos como pendentes.
+    """
+    ficha_existente = conn.execute(
+        text(
+            """
+            SELECT id
+            FROM public.fichas_credito
+            WHERE lead_id = :lead_id
+            """
+        ),
+        {"lead_id": lead_id},
+    ).scalar()
+
+    if ficha_existente:
+        return int(ficha_existente)
+
+    ficha_id = conn.execute(
+        text(
+            """
+            INSERT INTO public.fichas_credito (
+                lead_id,
+                vendedor_id,
+                valor_entrada,
+                criado_por_id,
+                atualizado_por_id
+            )
+            VALUES (
+                :lead_id,
+                :vendedor_id,
+                :valor_entrada,
+                :usuario_id,
+                :usuario_id
+            )
+            RETURNING id
+            """
+        ),
+        {
+            "lead_id": lead_id,
+            "vendedor_id": vendedor_id,
+            "valor_entrada": max(float(valor_entrada or 0), 0),
+            "usuario_id": usuario_id,
+        },
+    ).scalar_one()
+
+    for banco in BANCOS_CREDITO:
+        conn.execute(
+            text(
+                """
+                INSERT INTO public.ficha_bancos (ficha_id, banco)
+                VALUES (:ficha_id, :banco)
+                ON CONFLICT (ficha_id, banco) DO NOTHING
+                """
+            ),
+            {"ficha_id": ficha_id, "banco": banco},
+        )
+
+    return int(ficha_id)
+
+
+def obter_fichas_credito(
+    usuario: Dict[str, Any],
+    status: str = "todas",
+    busca: str = "",
+) -> pd.DataFrame:
+    if usuario["tipo"] == "vendedor":
+        filtro_acesso = "f.vendedor_id = :vendedor_id"
+        parametros: Dict[str, Any] = {
+            "vendedor_id": usuario.get("vendedor_id")
+        }
+    else:
+        filtro_acesso = "TRUE"
+        parametros = {}
+
+    filtro_status = """
+        (
+            :status = 'todas'
+            OR f.status_geral = :status
+        )
+    """
+    filtro_busca = """
+        (
+            :busca = ''
+            OR l.nome_lead ILIKE :termo
+            OR l.nome_completo ILIKE :termo
+            OR l.cpf ILIKE :termo
+            OR l.telefone ILIKE :termo
+            OR v.nome ILIKE :termo
+        )
+    """
+
+    parametros.update(
+        {
+            "status": status,
+            "busca": busca.strip(),
+            "termo": f"%{busca.strip()}%",
+        }
+    )
+
+    query = text(
+        f"""
+        SELECT
+            f.id,
+            f.lead_id,
+            f.vendedor_id,
+            f.valor_entrada,
+            f.status_geral,
+            f.comprou,
+            f.data_compra,
+            f.valor_veiculo,
+            f.valor_financiado,
+            f.gerou_boleto,
+            f.boleto_valor,
+            f.boleto_meses,
+            f.created_at,
+            f.updated_at,
+            l.nome_lead,
+            l.nome_completo,
+            l.cpf,
+            l.data_nascimento,
+            l.habilitado,
+            l.produto_interesse,
+            l.telefone,
+            v.nome AS vendedor_nome
+        FROM public.fichas_credito f
+        JOIN public.leads l
+            ON l.id = f.lead_id
+        LEFT JOIN public.vendedores v
+            ON v.id = f.vendedor_id
+        WHERE ({filtro_acesso})
+          AND ({filtro_status})
+          AND ({filtro_busca})
+        ORDER BY f.updated_at DESC, f.id DESC
+        """
+    )
+
+    with engine.connect() as conn:
+        return pd.read_sql_query(query, conn, params=parametros)
+
+
+def obter_analises_banco(ficha_id: int) -> pd.DataFrame:
+    query = text(
+        """
+        SELECT
+            id,
+            ficha_id,
+            banco,
+            status,
+            valor_financiado,
+            valor_entrada,
+            parcela_48,
+            parcela_64,
+            observacao,
+            atualizado_por_id,
+            updated_at
+        FROM public.ficha_bancos
+        WHERE ficha_id = :ficha_id
+        ORDER BY
+            CASE banco
+                WHEN 'Itau' THEN 1
+                WHEN 'Bradesco' THEN 2
+                WHEN 'Santander' THEN 3
+                WHEN 'Safra' THEN 4
+                WHEN 'Creditas' THEN 5
+                WHEN 'BV' THEN 6
+                WHEN 'Pan' THEN 7
+                ELSE 99
+            END
+        """
+    )
+
+    with engine.connect() as conn:
+        return pd.read_sql_query(
+            query,
+            conn,
+            params={"ficha_id": ficha_id},
+        )
+
+
+def recalcular_status_ficha(conn: Any, ficha_id: int) -> str:
+    statuses = conn.execute(
+        text(
+            """
+            SELECT status
+            FROM public.ficha_bancos
+            WHERE ficha_id = :ficha_id
+            """
+        ),
+        {"ficha_id": ficha_id},
+    ).scalars().all()
+
+    if any(status == "aprovado" for status in statuses):
+        novo_status = "aprovada"
+    elif statuses and all(status == "negado" for status in statuses):
+        novo_status = "negada"
+    else:
+        novo_status = "pendente"
+
+    conn.execute(
+        text(
+            """
+            UPDATE public.fichas_credito
+            SET status_geral = :status,
+                updated_at = NOW()
+            WHERE id = :ficha_id
+            """
+        ),
+        {"status": novo_status, "ficha_id": ficha_id},
+    )
+
+    conn.execute(
+        text(
+            """
+            UPDATE public.leads l
+            SET aprovou_credito = CASE
+                    WHEN :status = 'aprovada' THEN TRUE
+                    WHEN :status = 'negada' THEN FALSE
+                    ELSE NULL
+                END,
+                updated_at = NOW()
+            FROM public.fichas_credito f
+            WHERE f.id = :ficha_id
+              AND l.id = f.lead_id
+            """
+        ),
+        {"status": novo_status, "ficha_id": ficha_id},
+    )
+
+    return novo_status
+
+
+def salvar_analise_banco(
+    usuario: Dict[str, Any],
+    ficha: pd.Series,
+    banco_id: int,
+    banco: str,
+    status: str,
+    valor_financiado: Optional[float],
+    valor_entrada: Optional[float],
+    parcela_48: Optional[float],
+    parcela_64: Optional[float],
+    observacao: str,
+) -> None:
+    if not usuario_tem("edit_bank_results"):
+        st.error("Você não pode alterar análises bancárias.")
+        return
+
+    if status == "aprovado" and valor_financiado is None:
+        st.error("Uma aprovação precisa ter o valor financiado.")
+        return
+
+    # Para uma recusa ou pendência, os valores financeiros ficam nulos.
+    if status != "aprovado":
+        valor_financiado = None
+        valor_entrada = None
+        parcela_48 = None
+        parcela_64 = None
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    UPDATE public.ficha_bancos
+                    SET
+                        status = :status,
+                        valor_financiado = :valor_financiado,
+                        valor_entrada = :valor_entrada,
+                        parcela_48 = :parcela_48,
+                        parcela_64 = :parcela_64,
+                        observacao = :observacao,
+                        atualizado_por_id = :usuario_id,
+                        updated_at = NOW()
+                    WHERE id = :banco_id
+                      AND ficha_id = :ficha_id
+                    """
+                ),
+                {
+                    "status": status,
+                    "valor_financiado": valor_financiado,
+                    "valor_entrada": valor_entrada,
+                    "parcela_48": parcela_48,
+                    "parcela_64": parcela_64,
+                    "observacao": observacao.strip() or None,
+                    "usuario_id": usuario["id"],
+                    "banco_id": banco_id,
+                    "ficha_id": ficha["id"],
+                },
+            )
+
+            novo_status_geral = recalcular_status_ficha(
+                conn,
+                int(ficha["id"]),
+            )
+            criar_notificacao_vendedor(
+                ficha.get("vendedor_id"),
+                int(ficha["id"]),
+                f"Atualização da ficha de {ficha['nome_lead']}",
+                f"{banco}: {status}. Resultado geral: "
+                f"{novo_status_geral}.",
+                conn,
+            )
+
+        st.success(f"Resultado do {banco} salvo.")
+        st.rerun()
+    except Exception as erro:
+        st.error(f"Erro ao salvar análise bancária: {erro}")
+
+
+def salvar_dados_financeiros_ficha(
+    usuario: Dict[str, Any],
+    ficha: pd.Series,
+    comprou: bool,
+    data_compra: Optional[date],
+    valor_veiculo: Optional[float],
+    valor_financiado: Optional[float],
+    gerou_boleto: bool,
+    boleto_valor: Optional[float],
+    boleto_meses: Optional[int],
+) -> None:
+    pode_alterar = (
+        usuario_tem("edit_sales_boleto")
+        or (
+            usuario_tem("edit_own_credit_data")
+            and ficha.get("vendedor_id") == usuario.get("vendedor_id")
+        )
+    )
+
+    if not pode_alterar:
+        st.error("Você não pode alterar esses dados financeiros.")
+        return
+
+    if not comprou:
+        data_compra = None
+        valor_veiculo = None
+        valor_financiado = None
+
+    if not gerou_boleto:
+        boleto_valor = None
+        boleto_meses = None
+
+    if gerou_boleto and (
+        boleto_valor is None or not boleto_meses or boleto_meses <= 0
+    ):
+        st.error(
+            "Informe o valor e a quantidade de meses do boleto."
+        )
+        return
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    UPDATE public.fichas_credito
+                    SET
+                        comprou = :comprou,
+                        data_compra = :data_compra,
+                        valor_veiculo = :valor_veiculo,
+                        valor_financiado = :valor_financiado,
+                        gerou_boleto = :gerou_boleto,
+                        boleto_valor = :boleto_valor,
+                        boleto_meses = :boleto_meses,
+                        atualizado_por_id = :usuario_id,
+                        updated_at = NOW()
+                    WHERE id = :ficha_id
+                    """
+                ),
+                {
+                    "comprou": comprou,
+                    "data_compra": data_compra,
+                    "valor_veiculo": valor_veiculo,
+                    "valor_financiado": valor_financiado,
+                    "gerou_boleto": gerou_boleto,
+                    "boleto_valor": boleto_valor,
+                    "boleto_meses": boleto_meses,
+                    "usuario_id": usuario["id"],
+                    "ficha_id": ficha["id"],
+                },
+            )
+
+            conn.execute(
+                text(
+                    """
+                    UPDATE public.leads l
+                    SET venda_concluida = :comprou,
+                        vendeu = :comprou,
+                        updated_at = NOW()
+                    FROM public.fichas_credito f
+                    WHERE f.id = :ficha_id
+                      AND l.id = f.lead_id
+                    """
+                ),
+                {
+                    "comprou": comprou,
+                    "ficha_id": ficha["id"],
+                },
+            )
+
+            if comprou:
+                criar_notificacao_vendedor(
+                    ficha.get("vendedor_id"),
+                    int(ficha["id"]),
+                    f"Compra atualizada: {ficha['nome_lead']}",
+                    "Os dados de compra da sua ficha foram atualizados.",
+                    conn,
+                )
+
+        st.success("Dados financeiros salvos.")
+        st.rerun()
+    except Exception as erro:
+        st.error(f"Erro ao salvar dados financeiros: {erro}")
+
+
+def salvar_dados_cadastrais_ficha(
+    usuario: Dict[str, Any],
+    ficha: pd.Series,
+    nome_completo: str,
+    cpf: str,
+    data_nascimento: str,
+    habilitado: bool,
+    carro_interesse: str,
+    valor_entrada: float,
+) -> None:
+    pode_alterar = (
+        usuario_tem("edit_bank_results")
+        or (
+            usuario_tem("edit_own_credit_data")
+            and ficha.get("vendedor_id") == usuario.get("vendedor_id")
+        )
+    )
+
+    if not pode_alterar:
+        st.error("Você não pode alterar os dados da ficha.")
+        return
+
+    if not nome_completo.strip() or not cpf.strip():
+        st.error("Nome completo e CPF são obrigatórios.")
+        return
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    UPDATE public.leads
+                    SET
+                        nome_completo = :nome_completo,
+                        cpf = :cpf,
+                        data_nascimento = :data_nascimento,
+                        habilitado = :habilitado,
+                        produto_interesse = :produto_interesse,
+                        valor_entrada = :valor_entrada,
+                        updated_at = NOW()
+                    WHERE id = :lead_id
+                    """
+                ),
+                {
+                    "nome_completo": nome_completo.strip(),
+                    "cpf": cpf.strip(),
+                    "data_nascimento": data_nascimento.strip() or None,
+                    "habilitado": habilitado,
+                    "produto_interesse": (
+                        carro_interesse.strip() or None
+                    ),
+                    "valor_entrada": max(float(valor_entrada or 0), 0),
+                    "lead_id": ficha["lead_id"],
+                },
+            )
+            conn.execute(
+                text(
+                    """
+                    UPDATE public.fichas_credito
+                    SET valor_entrada = :valor_entrada,
+                        atualizado_por_id = :usuario_id,
+                        updated_at = NOW()
+                    WHERE id = :ficha_id
+                    """
+                ),
+                {
+                    "valor_entrada": max(float(valor_entrada or 0), 0),
+                    "usuario_id": usuario["id"],
+                    "ficha_id": ficha["id"],
+                },
+            )
+
+        st.success("Dados cadastrais da ficha atualizados.")
+        st.rerun()
+    except Exception as erro:
+        st.error(f"Erro ao atualizar dados da ficha: {erro}")
+
+
+def obter_metricas_credito() -> tuple[pd.DataFrame, Dict[str, Any]]:
+    query_bancos = text(
+        """
+        SELECT
+            banco,
+            COUNT(*) AS total_fichas,
+            COUNT(*) FILTER (WHERE status = 'aprovado')
+                AS total_aprovados,
+            COUNT(*) FILTER (WHERE status = 'negado')
+                AS total_negados,
+            COUNT(*) FILTER (WHERE status = 'pendente')
+                AS total_pendentes,
+            ROUND(
+                100.0 * COUNT(*) FILTER (WHERE status = 'aprovado')
+                / NULLIF(COUNT(*), 0),
+                2
+            ) AS taxa_aprovacao
+        FROM public.ficha_bancos
+        GROUP BY banco
+        ORDER BY total_aprovados DESC, taxa_aprovacao DESC
+        """
+    )
+
+    query_geral = text(
+        """
+        SELECT
+            COUNT(*) AS total_fichas,
+            COUNT(*) FILTER (WHERE status_geral = 'aprovada')
+                AS fichas_aprovadas,
+            COUNT(*) FILTER (WHERE status_geral = 'negada')
+                AS fichas_negadas,
+            COUNT(*) FILTER (WHERE status_geral = 'pendente')
+                AS fichas_pendentes,
+            COUNT(*) FILTER (WHERE comprou = TRUE)
+                AS total_compras,
+            COALESCE(SUM(valor_veiculo)
+                FILTER (WHERE comprou = TRUE), 0) AS valor_vendas,
+            COUNT(*) FILTER (WHERE gerou_boleto = TRUE)
+                AS total_boletos,
+            COALESCE(SUM(boleto_valor)
+                FILTER (WHERE gerou_boleto = TRUE), 0) AS valor_boletos,
+            COALESCE(SUM(boleto_meses)
+                FILTER (WHERE gerou_boleto = TRUE), 0) AS meses_boletos
+        FROM public.fichas_credito
+        """
+    )
+
+    with engine.connect() as conn:
+        por_banco = pd.read_sql_query(query_bancos, conn)
+        geral = conn.execute(query_geral).mappings().first()
+
+    return por_banco, dict(geral or {})
+
+
 # ============================================================
 # MODAIS DE EDIÇÃO
 # ============================================================
@@ -1001,6 +1677,23 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
                 st.session_state["abrir_formulario"] = False
                 st.rerun()
 
+        if usuario_tem("view_credit_fichas"):
+            notificacoes_fichas = contar_notificacoes_nao_lidas(
+                usuario["id"]
+            )
+            label_fichas = "Fichas de Crédito"
+            if notificacoes_fichas:
+                label_fichas += f" 🔴 ({notificacoes_fichas})"
+
+            if st.button(
+                label_fichas,
+                use_container_width=True,
+                type="primary" if pagina == "fichas" else "secondary",
+            ):
+                st.session_state["pagina_atual"] = "fichas"
+                st.session_state["abrir_formulario"] = False
+                st.rerun()
+
         if usuario_tem("view_tasks"):
             tarefas_nao_lidas = contar_tarefas_nao_visualizadas(
                 usuario["id"]
@@ -1078,7 +1771,8 @@ def mostrar_formulario_novo_lead(
         cpf = None
         data_nascimento = None
         habilitado = None
-        aprovou_credito = None
+        carro_interesse = None
+        valor_entrada = None
 
         if gerou_ficha:
             st.markdown("### 📝 Dados da ficha")
@@ -1086,7 +1780,12 @@ def mostrar_formulario_novo_lead(
 
             with col_ficha_1:
                 cpf = st.text_input("CPF")
+                nome_completo = st.text_input(
+                    "Nome completo",
+                    value=nome,
+                )
                 data_nascimento = st.text_input("Data de nascimento")
+                carro_interesse = st.text_input("Carro de interesse")
 
             with col_ficha_2:
                 habilitado = st.radio(
@@ -1094,11 +1793,11 @@ def mostrar_formulario_novo_lead(
                     ["Não", "Sim"],
                     horizontal=True,
                 ) == "Sim"
-                aprovou_credito = st.radio(
-                    "Status do crédito",
-                    ["Aprovado", "Recusado"],
-                    horizontal=True,
-                ) == "Aprovado"
+                valor_entrada = st.number_input(
+                    "Valor de entrada",
+                    min_value=0.0,
+                    step=100.0,
+                )
 
         observacao = st.text_area("Observações gerais")
 
@@ -1126,9 +1825,12 @@ def mostrar_formulario_novo_lead(
                 gerou_ficha,
                 venda_concluida,
                 cpf,
+                nome_completo,
                 data_nascimento,
                 habilitado,
                 aprovou_credito,
+                produto_interesse,
+                valor_entrada,
                 observacao,
                 created_at,
                 updated_at
@@ -1141,18 +1843,22 @@ def mostrar_formulario_novo_lead(
                 :gerou_ficha,
                 :venda_concluida,
                 :cpf,
+                :nome_completo,
                 :data_nascimento,
                 :habilitado,
                 :aprovou_credito,
+                :produto_interesse,
+                :valor_entrada,
                 :observacao,
                 NOW(),
                 NOW()
             )
+            RETURNING id
             """
         )
 
         with engine.begin() as conn:
-            conn.execute(
+            lead_id = conn.execute(
                 query,
                 {
                     "nome": nome.strip(),
@@ -1162,20 +1868,44 @@ def mostrar_formulario_novo_lead(
                     "gerou_ficha": gerou_ficha,
                     "venda_concluida": venda_concluida,
                     "cpf": cpf.strip() if cpf else None,
+                    "nome_completo": (
+                        nome_completo.strip()
+                        if gerou_ficha and nome_completo.strip()
+                        else nome.strip()
+                    ),
                     "data_nascimento": (
                         data_nascimento.strip()
-                        if data_nascimento
+                        if gerou_ficha and data_nascimento
                         else None
                     ),
                     "habilitado": habilitado,
-                    "aprovou_credito": aprovou_credito,
+                    "aprovou_credito": None,
+                    "produto_interesse": (
+                        carro_interesse.strip()
+                        if gerou_ficha and carro_interesse
+                        else None
+                    ),
+                    "valor_entrada": (
+                        valor_entrada
+                        if gerou_ficha
+                        else None
+                    ),
                     "observacao": (
                         observacao.strip()
                         if observacao.strip()
                         else None
                     ),
                 },
-            )
+            ).scalar_one()
+
+            if gerou_ficha:
+                criar_ficha_credito(
+                    conn=conn,
+                    lead_id=int(lead_id),
+                    vendedor_id=vendedor_id,
+                    valor_entrada=float(valor_entrada or 0),
+                    usuario_id=usuario["id"],
+                )
 
         st.success("Lead inserido com sucesso.")
         st.session_state["abrir_formulario"] = False
@@ -1388,17 +2118,455 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
             col4.metric("Vendas", int(row["total_vendas"]))
 
 
+def pagina_fichas(usuario: Dict[str, Any]) -> None:
+    if not usuario_tem("view_credit_fichas"):
+        st.error("Você não tem permissão para acessar fichas de crédito.")
+        return
+
+    st.title("Fichas de Crédito")
+    st.caption(
+        "Análise por banco, resultado da compra e informações de boleto."
+    )
+
+    notificacoes = contar_notificacoes_nao_lidas(usuario["id"])
+    if notificacoes:
+        st.warning(
+            f"Você tem {notificacoes} atualização(ões) de ficha não lida(s)."
+        )
+        marcar_notificacoes_como_lidas(usuario["id"])
+
+    if usuario_tem("view_credit_metrics"):
+        try:
+            por_banco, geral = obter_metricas_credito()
+            st.subheader("Métricas financeiras")
+            metricas = st.columns(6)
+            metricas[0].metric(
+                "Fichas",
+                int(geral.get("total_fichas") or 0),
+            )
+            metricas[1].metric(
+                "Aprovadas",
+                int(geral.get("fichas_aprovadas") or 0),
+            )
+            metricas[2].metric(
+                "Negadas",
+                int(geral.get("fichas_negadas") or 0),
+            )
+            metricas[3].metric(
+                "Pendentes",
+                int(geral.get("fichas_pendentes") or 0),
+            )
+            metricas[4].metric(
+                "Compras",
+                int(geral.get("total_compras") or 0),
+            )
+            metricas[5].metric(
+                "Boletos",
+                int(geral.get("total_boletos") or 0),
+            )
+
+            if not por_banco.empty:
+                st.markdown("#### Aprovação por banco")
+                st.dataframe(
+                    por_banco,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            c_fin_1, c_fin_2, c_fin_3 = st.columns(3)
+            c_fin_1.metric(
+                "Valor em vendas",
+                f"R$ {float(geral.get('valor_vendas') or 0):,.2f}",
+            )
+            c_fin_2.metric(
+                "Valor em boletos",
+                f"R$ {float(geral.get('valor_boletos') or 0):,.2f}",
+            )
+            c_fin_3.metric(
+                "Meses de boleto",
+                int(geral.get("meses_boletos") or 0),
+            )
+        except Exception as erro:
+            st.warning(
+                "As métricas ainda não estão disponíveis. "
+                f"Detalhe: {erro}"
+            )
+
+        st.markdown("---")
+
+    status_opcoes = [
+        "todas",
+        "pendente",
+        "aprovada",
+        "negada",
+    ]
+    status = st.radio(
+        "Filtrar fichas",
+        status_opcoes,
+        horizontal=True,
+        format_func=lambda valor: {
+            "todas": "Todas",
+            "pendente": "Pendentes",
+            "aprovada": "Aprovadas",
+            "negada": "Negadas",
+        }[valor],
+    )
+    busca = st.text_input(
+        "Buscar ficha",
+        placeholder="Nome, CPF, telefone ou vendedor",
+    )
+
+    try:
+        fichas = obter_fichas_credito(usuario, status, busca)
+    except Exception as erro:
+        st.error(
+            "Não foi possível carregar as fichas. "
+            "Execute schema_fichas_credito.sql no Supabase. "
+            f"Detalhe: {erro}"
+        )
+        return
+
+    if fichas.empty:
+        st.info("Nenhuma ficha encontrada.")
+        return
+
+    for _, ficha in fichas.iterrows():
+        status_label = {
+            "pendente": "⏳ Pendente",
+            "aprovada": "✅ Aprovada",
+            "negada": "❌ Negada",
+        }.get(ficha["status_geral"], ficha["status_geral"])
+
+        nome_cliente = (
+            ficha.get("nome_completo")
+            or ficha.get("nome_lead")
+            or "Cliente sem nome"
+        )
+
+        with st.expander(
+            f"{status_label}  |  {nome_cliente}",
+            expanded=(status == "pendente"),
+        ):
+            col_cliente_1, col_cliente_2, col_cliente_3 = st.columns(3)
+            col_cliente_1.write(f"**Vendedor:** {ficha.get('vendedor_nome') or '-'}")
+            col_cliente_2.write(f"**CPF:** {ficha.get('cpf') or '-'}")
+            col_cliente_3.write(
+                f"**Carro:** {ficha.get('produto_interesse') or '-'}"
+            )
+
+            col_cliente_4, col_cliente_5, col_cliente_6 = st.columns(3)
+            col_cliente_4.write(
+                f"**Data de nascimento:** "
+                f"{ficha.get('data_nascimento') or '-'}"
+            )
+            col_cliente_5.write(
+                f"**Habilitado:** "
+                f"{'Sim' if ficha.get('habilitado') else 'Não'}"
+            )
+            col_cliente_6.write(
+                f"**Entrada solicitada:** "
+                f"R$ {numero_seguro(ficha.get('valor_entrada')):,.2f}"
+            )
+
+            pode_editar_dados = (
+                usuario_tem("edit_bank_results")
+                or (
+                    usuario_tem("edit_own_credit_data")
+                    and ficha.get("vendedor_id")
+                    == usuario.get("vendedor_id")
+                )
+            )
+
+            if pode_editar_dados:
+                with st.expander("Editar dados da ficha"):
+                    with st.form(f"form_dados_ficha_{ficha['id']}"):
+                        d1, d2 = st.columns(2)
+                        novo_nome_completo = d1.text_input(
+                            "Nome completo",
+                            value=str(ficha.get("nome_completo") or ""),
+                        )
+                        novo_cpf = d2.text_input(
+                            "CPF",
+                            value=str(ficha.get("cpf") or ""),
+                        )
+                        d3, d4 = st.columns(2)
+                        nova_data_nascimento = d3.text_input(
+                            "Data de nascimento",
+                            value=str(
+                                ficha.get("data_nascimento") or ""
+                            ),
+                        )
+                        novo_carro = d4.text_input(
+                            "Carro de interesse",
+                            value=str(
+                                ficha.get("produto_interesse") or ""
+                            ),
+                        )
+                        novo_habilitado = st.checkbox(
+                            "Cliente habilitado",
+                            value=bool(ficha.get("habilitado")),
+                        )
+                        nova_entrada_ficha = st.number_input(
+                            "Valor de entrada",
+                            min_value=0.0,
+                            value=numero_seguro(
+                                ficha.get("valor_entrada")
+                            ),
+                            step=100.0,
+                        )
+                        salvar_cadastro = st.form_submit_button(
+                            "Salvar dados da ficha",
+                            use_container_width=True,
+                        )
+
+                    if salvar_cadastro:
+                        salvar_dados_cadastrais_ficha(
+                            usuario,
+                            ficha,
+                            novo_nome_completo,
+                            novo_cpf,
+                            nova_data_nascimento,
+                            novo_habilitado,
+                            novo_carro,
+                            nova_entrada_ficha,
+                        )
+
+            st.markdown("### Resultado nos bancos")
+            try:
+                bancos = obter_analises_banco(int(ficha["id"]))
+            except Exception as erro:
+                st.error(f"Erro ao carregar bancos: {erro}")
+                bancos = pd.DataFrame()
+
+            if bancos.empty:
+                st.warning("Esta ficha ainda não possui bancos cadastrados.")
+            else:
+                for _, banco in bancos.iterrows():
+                    status_banco = banco.get("status") or "pendente"
+                    label_banco = {
+                        "pendente": "⏳",
+                        "aprovado": "✅",
+                        "negado": "❌",
+                    }.get(status_banco, "•")
+
+                    with st.container(border=True):
+                        st.markdown(
+                            f"#### {label_banco} {banco['banco']}"
+                        )
+
+                        if usuario_tem("edit_bank_results"):
+                            status_lista = [
+                                "pendente",
+                                "aprovado",
+                                "negado",
+                            ]
+                            indice_status = (
+                                status_lista.index(status_banco)
+                                if status_banco in status_lista
+                                else 0
+                            )
+
+                            def numero_banco(nome_coluna: str) -> float:
+                                valor = banco.get(nome_coluna)
+                                return (
+                                    float(valor)
+                                    if pd.notna(valor)
+                                    else 0.0
+                                )
+
+                            with st.form(
+                                f"form_banco_{ficha['id']}_{banco['id']}"
+                            ):
+                                novo_status = st.selectbox(
+                                    "Status",
+                                    status_lista,
+                                    index=indice_status,
+                                    format_func=lambda valor: {
+                                        "pendente": "Pendente",
+                                        "aprovado": "Aprovado",
+                                        "negado": "Negado",
+                                    }[valor],
+                                )
+                                st.caption(
+                                    "Os valores abaixo só são gravados "
+                                    "quando o banco estiver aprovado."
+                                )
+                                b1, b2, b3, b4 = st.columns(4)
+                                novo_valor_financiado = b1.number_input(
+                                    "Valor financiado",
+                                    min_value=0.0,
+                                    value=numero_banco(
+                                        "valor_financiado"
+                                    ),
+                                    step=100.0,
+                                )
+                                nova_entrada = b2.number_input(
+                                    "Entrada",
+                                    min_value=0.0,
+                                    value=numero_banco("valor_entrada"),
+                                    step=100.0,
+                                )
+                                nova_parcela_48 = b3.number_input(
+                                    "Parcela em 48x",
+                                    min_value=0.0,
+                                    value=numero_banco("parcela_48"),
+                                    step=10.0,
+                                )
+                                nova_parcela_64 = b4.number_input(
+                                    "Parcela em 64x",
+                                    min_value=0.0,
+                                    value=numero_banco("parcela_64"),
+                                    step=10.0,
+                                )
+                                nova_observacao = st.text_area(
+                                    "Observação do banco",
+                                    value=str(
+                                        banco.get("observacao") or ""
+                                    ),
+                                )
+                                salvar_banco = st.form_submit_button(
+                                    "Salvar resultado",
+                                    use_container_width=True,
+                                )
+
+                            if salvar_banco:
+                                valor_financiado_final = (
+                                    novo_valor_financiado
+                                    if novo_status == "aprovado"
+                                    else None
+                                )
+                                salvar_analise_banco(
+                                    usuario,
+                                    ficha,
+                                    int(banco["id"]),
+                                    banco["banco"],
+                                    novo_status,
+                                    valor_financiado_final,
+                                    nova_entrada,
+                                    nova_parcela_48,
+                                    nova_parcela_64,
+                                    nova_observacao,
+                                )
+                        else:
+                            st.write(f"**Status:** {status_banco}")
+                            if status_banco == "aprovado":
+                                a1, a2, a3, a4 = st.columns(4)
+                                a1.metric(
+                                    "Financiado",
+                                    f"R$ {float(banco.get('valor_financiado') or 0):,.2f}",
+                                )
+                                a2.metric(
+                                    "Entrada",
+                                    f"R$ {float(banco.get('valor_entrada') or 0):,.2f}",
+                                )
+                                a3.metric(
+                                    "48x",
+                                    f"R$ {float(banco.get('parcela_48') or 0):,.2f}",
+                                )
+                                a4.metric(
+                                    "64x",
+                                    f"R$ {float(banco.get('parcela_64') or 0):,.2f}",
+                                )
+                            if banco.get("observacao"):
+                                st.caption(banco["observacao"])
+
+            pode_financeiro = (
+                usuario_tem("edit_sales_boleto")
+                or (
+                    usuario_tem("edit_own_credit_data")
+                    and ficha.get("vendedor_id")
+                    == usuario.get("vendedor_id")
+                )
+            )
+
+            st.markdown("### Compra e boleto")
+            if pode_financeiro:
+                with st.form(f"form_financeiro_ficha_{ficha['id']}"):
+                    comprou = st.checkbox(
+                        "Cliente comprou?",
+                        value=bool(ficha.get("comprou")),
+                    )
+                    f1, f2, f3 = st.columns(3)
+                    data_compra = f1.date_input(
+                        "Data da compra",
+                        value=converter_data(ficha.get("data_compra")),
+                        disabled=not comprou,
+                    )
+                    valor_veiculo = f2.number_input(
+                        "Valor do veículo",
+                        min_value=0.0,
+                        value=numero_seguro(ficha.get("valor_veiculo")),
+                        step=100.0,
+                        disabled=not comprou,
+                    )
+                    valor_financiado = f3.number_input(
+                        "Valor financiado",
+                        min_value=0.0,
+                        value=numero_seguro(
+                            ficha.get("valor_financiado")
+                        ),
+                        step=100.0,
+                        disabled=not comprou,
+                    )
+                    gerou_boleto = st.checkbox(
+                        "Gerou boleto?",
+                        value=bool(ficha.get("gerou_boleto")),
+                    )
+                    b1, b2 = st.columns(2)
+                    boleto_valor = b1.number_input(
+                        "Valor do boleto",
+                        min_value=0.0,
+                        value=numero_seguro(ficha.get("boleto_valor")),
+                        step=10.0,
+                        disabled=not gerou_boleto,
+                    )
+                    boleto_meses = b2.number_input(
+                        "Quantidade de meses",
+                        min_value=1,
+                        value=inteiro_seguro(
+                            ficha.get("boleto_meses")
+                        ),
+                        step=1,
+                        disabled=not gerou_boleto,
+                    )
+                    salvar_financeiro = st.form_submit_button(
+                        "Salvar compra e boleto",
+                        use_container_width=True,
+                    )
+
+                if salvar_financeiro:
+                    salvar_dados_financeiros_ficha(
+                        usuario,
+                        ficha,
+                        comprou,
+                        data_compra if comprou else None,
+                        valor_veiculo if comprou else None,
+                        valor_financiado if comprou else None,
+                        gerou_boleto,
+                        boleto_valor if gerou_boleto else None,
+                        boleto_meses if gerou_boleto else None,
+                    )
+            else:
+                st.write(
+                    f"**Comprou:** {'Sim' if ficha.get('comprou') else 'Não'}"
+                )
+                st.write(
+                    f"**Boleto:** "
+                    f"{'Sim' if ficha.get('gerou_boleto') else 'Não'}"
+                )
+                if ficha.get("gerou_boleto"):
+                    st.write(
+                        f"R$ {numero_seguro(ficha.get('boleto_valor')):,.2f} "
+                        f"por {inteiro_seguro(ficha.get('boleto_meses'), 0)} meses"
+                    )
+
+
 def pagina_elfen_ai() -> None:
     if not usuario_tem("use_elfen_ai"):
         st.error("Você não tem permissão para acessar a Elfen AI.")
         return
 
-    st.title("Elfen AI")
-    st.info(
-        "Área reservada para os recursos de inteligência artificial. "
-        "A regra de acesso já está pronta; os recursos da IA podem ser "
-        "adicionados nesta página."
-    )
+    pagina_fichas(st.session_state["usuario_logado"])
 
 
 def pagina_chat(usuario: Dict[str, Any]) -> None:
@@ -2146,6 +3314,9 @@ if usuario_tem("use_chat"):
 if usuario_tem("use_elfen_ai"):
     paginas_permitidas.add("elfen_ai")
 
+if usuario_tem("view_credit_fichas"):
+    paginas_permitidas.add("fichas")
+
 if usuario_tem("view_tasks"):
     paginas_permitidas.add("tarefas")
 
@@ -2167,6 +3338,8 @@ elif pagina_atual == "chat":
     pagina_chat(usuario_atual)
 elif pagina_atual == "elfen_ai":
     pagina_elfen_ai()
+elif pagina_atual == "fichas":
+    pagina_fichas(usuario_atual)
 elif pagina_atual == "tarefas":
     pagina_tarefas(usuario_atual)
 elif pagina_atual == "metas":
