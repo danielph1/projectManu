@@ -2412,10 +2412,10 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                                     value=numero_banco("parcela_48"),
                                     step=10.0,
                                 )
-                                nova_parcela_64 = b4.number_input(
-                                    "Parcela em 64x",
+                                nova_parcela_60 = b4.number_input(
+                                    "Parcela em 60x",
                                     min_value=0.0,
-                                    value=numero_banco("parcela_64"),
+                                    value=numero_banco("parcela_60"),
                                     step=10.0,
                                 )
                                 nova_observacao = st.text_area(
