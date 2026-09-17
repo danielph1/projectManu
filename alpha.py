@@ -38,6 +38,10 @@ ROLE_ALIASES = {
     "admin": "gerente",
     "administrador": "gerente",
     "gerente": "gerente",
+    "dono": "gerente",
+    "proprietario": "gerente",
+    "proprietário": "gerente",
+    "owner": "gerente",
     "vendedor": "vendedor",
     "elfenai": "elfen_ai",
     "elfen ai": "elfen_ai",
@@ -59,15 +63,9 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "view_documents",
     },
     "gerente": {
-        "view_leads",
-        "create_lead",
-        "edit_any_lead",
-        "delete_any_lead",
-        "view_team",
-        "use_chat",
-        "view_documents",
-        "view_financial",
-        "use_elfen_ai",
+        # O gerente é o superadministrador operacional da loja.
+        # A função usuario_tem() trata "*" como acesso total.
+        "*",
     },
     "elfen_ai": {
         "view_leads",
@@ -94,7 +92,8 @@ def usuario_tem(permissao: str) -> bool:
     usuario = st.session_state.get("usuario_logado")
     if not usuario:
         return False
-    return permissao in PERMISSIONS.get(usuario["tipo"], set())
+    permissoes_usuario = PERMISSIONS.get(usuario["tipo"], set())
+    return "*" in permissoes_usuario or permissao in permissoes_usuario
 
 
 def usuario_e_gerente() -> bool:
