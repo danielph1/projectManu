@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import secrets
+from datetime import date
 from typing import Any, Dict, Optional, Set
 
 import pandas as pd
@@ -61,6 +62,9 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "use_chat",
         "view_own_metrics",
         "view_documents",
+        "view_tasks",
+        "respond_tasks",
+        "view_goals",
     },
     "gerente": {
         # O gerente é o superadministrador operacional da loja.
@@ -70,14 +74,23 @@ PERMISSIONS: Dict[str, Set[str]] = {
     "elfen_ai": {
         "view_leads",
         "use_elfen_ai",
+        "view_tasks",
+        "respond_tasks",
+        "view_goals",
     },
     "financeiro": {
         "view_leads",
         "view_financial",
+        "view_tasks",
+        "respond_tasks",
+        "view_goals",
     },
     "documentista": {
         "view_leads",
         "view_documents",
+        "view_tasks",
+        "respond_tasks",
+        "view_goals",
     },
 }
 
@@ -567,6 +580,147 @@ def contar_mensagens_nao_lidas(
         return 0
 
 
+def obter_usuarios_ativos() -> pd.DataFrame:
+    query = text(
+        """
+        SELECT id, nome, login, tipo, ativo
+        FROM public.usuarios
+        WHERE COALESCE(ativo, TRUE) = TRUE
+        ORDER BY nome
+        """
+    )
+
+    with engine.connect() as conn:
+        return pd.read_sql_query(query, conn)
+
+
+def contar_tarefas_nao_visualizadas(usuario_id: int) -> int:
+    query = text(
+        """
+        SELECT COUNT(*)
+        FROM public.tarefas
+        WHERE destinatario_id = :usuario_id
+          AND visualizada_at IS NULL
+        """
+    )
+
+    try:
+        with engine.connect() as conn:
+            return int(
+                conn.execute(query, {"usuario_id": usuario_id}).scalar()
+                or 0
+            )
+    except Exception:
+        # Mantém a aplicação funcionando caso a migração ainda não
+        # tenha sido executada.
+        return 0
+
+
+def marcar_tarefas_como_visualizadas(usuario_id: int) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE public.tarefas
+                SET visualizada_at = NOW(),
+                    updated_at = NOW()
+                WHERE destinatario_id = :usuario_id
+                  AND visualizada_at IS NULL
+                """
+            ),
+            {"usuario_id": usuario_id},
+        )
+
+
+def obter_tarefas(usuario: Dict[str, Any]) -> pd.DataFrame:
+    if usuario["tipo"] == "gerente":
+        filtro = "TRUE"
+        parametros = {}
+    else:
+        filtro = "t.destinatario_id = :usuario_id"
+        parametros = {"usuario_id": usuario["id"]}
+
+    query = text(
+        f"""
+        SELECT
+            t.id,
+            t.titulo,
+            t.descricao,
+            t.destinatario_id,
+            t.criado_por_id,
+            t.resposta,
+            t.observacao,
+            t.visualizada_at,
+            t.respondida_at,
+            t.created_at,
+            t.updated_at,
+            destinatario.nome AS destinatario_nome,
+            criador.nome AS criador_nome
+        FROM public.tarefas t
+        JOIN public.usuarios destinatario
+            ON destinatario.id = t.destinatario_id
+        JOIN public.usuarios criador
+            ON criador.id = t.criado_por_id
+        WHERE {filtro}
+        ORDER BY
+            CASE WHEN t.resposta IS NULL THEN 0 ELSE 1 END,
+            t.created_at DESC
+        """
+    )
+
+    with engine.connect() as conn:
+        return pd.read_sql_query(query, conn, params=parametros)
+
+
+def obter_metas(usuario: Dict[str, Any]) -> pd.DataFrame:
+    if usuario["tipo"] == "gerente":
+        filtro = "TRUE"
+        parametros = {}
+    else:
+        filtro = """
+            m.destinatario_id = :usuario_id
+            OR m.destinatario_id IS NULL
+        """
+        parametros = {"usuario_id": usuario["id"]}
+
+    query = text(
+        f"""
+        SELECT
+            m.id,
+            m.titulo,
+            m.descricao,
+            m.unidade,
+            m.valor_objetivo,
+            m.periodo_inicio,
+            m.periodo_fim,
+            m.destinatario_id,
+            m.criado_por_id,
+            m.ativo,
+            m.created_at,
+            m.updated_at,
+            destinatario.nome AS destinatario_nome,
+            criador.nome AS criador_nome
+        FROM public.metas m
+        LEFT JOIN public.usuarios destinatario
+            ON destinatario.id = m.destinatario_id
+        JOIN public.usuarios criador
+            ON criador.id = m.criado_por_id
+        WHERE ({filtro})
+          AND m.ativo = TRUE
+        ORDER BY m.periodo_fim ASC NULLS LAST, m.created_at DESC
+        """
+    )
+
+    with engine.connect() as conn:
+        return pd.read_sql_query(query, conn, params=parametros)
+
+
+def converter_data(valor: Any) -> date:
+    if valor is None or pd.isna(valor):
+        return date.today()
+    return pd.to_datetime(valor).date()
+
+
 # ============================================================
 # MODAIS DE EDIÇÃO
 # ============================================================
@@ -835,6 +989,33 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
                 type="primary" if pagina == "chat" else "secondary",
             ):
                 st.session_state["pagina_atual"] = "chat"
+                st.rerun()
+
+        if usuario_tem("view_goals"):
+            if st.button(
+                "Metas",
+                use_container_width=True,
+                type="primary" if pagina == "metas" else "secondary",
+            ):
+                st.session_state["pagina_atual"] = "metas"
+                st.session_state["abrir_formulario"] = False
+                st.rerun()
+
+        if usuario_tem("view_tasks"):
+            tarefas_nao_lidas = contar_tarefas_nao_visualizadas(
+                usuario["id"]
+            )
+            label_tarefas = "Tarefas"
+            if tarefas_nao_lidas:
+                label_tarefas += f" 🔴 ({tarefas_nao_lidas})"
+
+            if st.button(
+                label_tarefas,
+                use_container_width=True,
+                type="primary" if pagina == "tarefas" else "secondary",
+            ):
+                st.session_state["pagina_atual"] = "tarefas"
+                st.session_state["abrir_formulario"] = False
                 st.rerun()
 
         if usuario_tem("use_elfen_ai"):
@@ -1371,6 +1552,576 @@ def pagina_chat(usuario: Dict[str, Any]) -> None:
             st.rerun()
 
 
+def pagina_tarefas(usuario: Dict[str, Any]) -> None:
+    """
+    Tarefas:
+    - o gerente cria, altera, exclui e realoca;
+    - cada usuário vê apenas as tarefas destinadas a si;
+    - o gerente vê todas;
+    - o destinatário responde Sim/Não e escreve uma observação;
+    - visualizada_at alimenta a notificação de não visualizada.
+    """
+    if not usuario_tem("view_tasks"):
+        st.error("Você não tem permissão para acessar tarefas.")
+        return
+
+    st.title("Tarefas")
+    st.caption(
+        "O gerente acompanha todas as tarefas. Cada colaborador "
+        "visualiza apenas as tarefas destinadas a ele."
+    )
+
+    tarefas_nao_lidas = contar_tarefas_nao_visualizadas(usuario["id"])
+    if tarefas_nao_lidas:
+        st.warning(
+            f"Você tem {tarefas_nao_lidas} tarefa(s) ainda não visualizada(s)."
+        )
+        # Abrir a aba representa a visualização das tarefas.
+        marcar_tarefas_como_visualizadas(usuario["id"])
+
+    if usuario["tipo"] == "gerente":
+        usuarios = obter_usuarios_ativos()
+        ids_usuarios = usuarios["id"].tolist()
+
+        with st.expander("➕ Criar nova tarefa", expanded=True):
+            with st.form("form_criar_tarefa"):
+                titulo = st.text_input("Título da tarefa*")
+                descricao = st.text_area("Descrição / instruções")
+
+                destinatario_id = st.selectbox(
+                    "Atribuir para*",
+                    options=ids_usuarios,
+                    format_func=lambda valor: usuarios.loc[
+                        usuarios["id"] == valor, "nome"
+                    ].iloc[0],
+                )
+
+                criar = st.form_submit_button(
+                    "Criar tarefa",
+                    use_container_width=True,
+                    type="primary",
+                )
+
+            if criar:
+                if not titulo.strip():
+                    st.warning("Informe um título para a tarefa.")
+                else:
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(
+                                text(
+                                    """
+                                    INSERT INTO public.tarefas (
+                                        titulo,
+                                        descricao,
+                                        destinatario_id,
+                                        criado_por_id
+                                    )
+                                    VALUES (
+                                        :titulo,
+                                        :descricao,
+                                        :destinatario_id,
+                                        :criado_por_id
+                                    )
+                                    """
+                                ),
+                                {
+                                    "titulo": titulo.strip(),
+                                    "descricao": (
+                                        descricao.strip()
+                                        if descricao.strip()
+                                        else None
+                                    ),
+                                    "destinatario_id": destinatario_id,
+                                    "criado_por_id": usuario["id"],
+                                },
+                            )
+                        st.success("Tarefa criada e atribuída.")
+                        st.rerun()
+                    except Exception as erro:
+                        st.error(f"Erro ao criar tarefa: {erro}")
+
+    try:
+        tarefas = obter_tarefas(usuario)
+    except Exception as erro:
+        st.error(
+            "Não foi possível carregar tarefas. "
+            "Execute primeiro o arquivo schema_metas_tarefas.sql "
+            f"no Supabase. Detalhe: {erro}"
+        )
+        return
+
+    if tarefas.empty:
+        st.info("Nenhuma tarefa encontrada.")
+        return
+
+    st.subheader(f"{len(tarefas)} tarefa(s)")
+
+    usuarios = (
+        obter_usuarios_ativos()
+        if usuario["tipo"] == "gerente"
+        else pd.DataFrame()
+    )
+
+    for _, tarefa in tarefas.iterrows():
+        resposta = tarefa.get("resposta")
+        if pd.isna(resposta):
+            status = "⏳ Aguardando resposta"
+        elif bool(resposta):
+            status = "✅ Concluída / Sim"
+        else:
+            status = "❌ Não realizada"
+
+        with st.expander(
+            f"{status}  |  {tarefa['titulo']}",
+            expanded=(pd.isna(resposta)),
+        ):
+            st.write(tarefa.get("descricao") or "Sem descrição.")
+            st.caption(
+                f"Destinatário: {tarefa['destinatario_nome']}  •  "
+                f"Criada por: {tarefa['criador_nome']}  •  "
+                f"Em: {tarefa['created_at']}"
+            )
+
+            if tarefa.get("observacao"):
+                st.info(f"**Observação da resposta:** {tarefa['observacao']}")
+
+            # O destinatário pode responder. O gerente também pode
+            # responder quando a tarefa foi atribuída a ele próprio.
+            eh_destinatario = tarefa["destinatario_id"] == usuario["id"]
+            if eh_destinatario and usuario_tem("respond_tasks"):
+                opcoes_resposta = [
+                    "Ainda não respondi",
+                    "Sim",
+                    "Não",
+                ]
+
+                if pd.isna(resposta):
+                    indice_resposta = 0
+                else:
+                    indice_resposta = 1 if bool(resposta) else 2
+
+                with st.form(f"form_resposta_tarefa_{tarefa['id']}"):
+                    resposta_escolhida = st.radio(
+                        "Você realizou esta tarefa?",
+                        opcoes_resposta,
+                        index=indice_resposta,
+                        horizontal=True,
+                    )
+                    observacao = st.text_area(
+                        "Observação",
+                        value=str(tarefa.get("observacao") or ""),
+                    )
+                    salvar_resposta = st.form_submit_button(
+                        "Salvar minha resposta",
+                        use_container_width=True,
+                    )
+
+                if salvar_resposta:
+                    nova_resposta = None
+                    if resposta_escolhida == "Sim":
+                        nova_resposta = True
+                    elif resposta_escolhida == "Não":
+                        nova_resposta = False
+
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(
+                                text(
+                                    """
+                                    UPDATE public.tarefas
+                                    SET
+                                        resposta = :resposta,
+                                        observacao = :observacao,
+                                        respondida_at = CASE
+                                            WHEN :resposta IS NULL
+                                            THEN NULL
+                                            ELSE NOW()
+                                        END,
+                                        updated_at = NOW()
+                                    WHERE id = :id
+                                      AND destinatario_id = :usuario_id
+                                    """
+                                ),
+                                {
+                                    "resposta": nova_resposta,
+                                    "observacao": (
+                                        observacao.strip()
+                                        if observacao.strip()
+                                        else None
+                                    ),
+                                    "id": tarefa["id"],
+                                    "usuario_id": usuario["id"],
+                                },
+                            )
+                        st.success("Resposta salva.")
+                        st.rerun()
+                    except Exception as erro:
+                        st.error(f"Erro ao responder tarefa: {erro}")
+
+            # Somente gerente altera a tarefa, inclusive o destinatário.
+            if usuario["tipo"] == "gerente":
+                st.markdown("---")
+                st.markdown("**Administração da tarefa**")
+
+                ids_usuarios = usuarios["id"].tolist()
+                indice_destinatario = (
+                    ids_usuarios.index(tarefa["destinatario_id"])
+                    if tarefa["destinatario_id"] in ids_usuarios
+                    else 0
+                )
+
+                with st.form(f"form_editar_tarefa_{tarefa['id']}"):
+                    novo_titulo = st.text_input(
+                        "Título",
+                        value=str(tarefa["titulo"]),
+                    )
+                    nova_descricao = st.text_area(
+                        "Descrição",
+                        value=str(tarefa.get("descricao") or ""),
+                    )
+                    novo_destinatario = st.selectbox(
+                        "Realocar para",
+                        options=ids_usuarios,
+                        index=indice_destinatario,
+                        format_func=lambda valor: usuarios.loc[
+                            usuarios["id"] == valor, "nome"
+                        ].iloc[0],
+                    )
+                    salvar_alteracao = st.form_submit_button(
+                        "Salvar alteração / realocação",
+                        use_container_width=True,
+                    )
+
+                if salvar_alteracao:
+                    if not novo_titulo.strip():
+                        st.warning("O título não pode ficar vazio.")
+                    else:
+                        try:
+                            with engine.begin() as conn:
+                                conn.execute(
+                                    text(
+                                        """
+                                        UPDATE public.tarefas
+                                        SET
+                                            titulo = :titulo,
+                                            descricao = :descricao,
+                                            destinatario_id = :destinatario_id,
+                                            updated_at = NOW()
+                                        WHERE id = :id
+                                        """
+                                    ),
+                                    {
+                                        "titulo": novo_titulo.strip(),
+                                        "descricao": (
+                                            nova_descricao.strip()
+                                            if nova_descricao.strip()
+                                            else None
+                                        ),
+                                        "destinatario_id": novo_destinatario,
+                                        "id": tarefa["id"],
+                                    },
+                                )
+                            st.success("Tarefa atualizada.")
+                            st.rerun()
+                        except Exception as erro:
+                            st.error(
+                                f"Erro ao atualizar tarefa: {erro}"
+                            )
+
+                if st.button(
+                    "🗑️ Remover tarefa",
+                    key=f"remover_tarefa_{tarefa['id']}",
+                    type="secondary",
+                ):
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(
+                                text(
+                                    """
+                                    DELETE FROM public.tarefas
+                                    WHERE id = :id
+                                    """
+                                ),
+                                {"id": tarefa["id"]},
+                            )
+                        st.success("Tarefa removida.")
+                        st.rerun()
+                    except Exception as erro:
+                        st.error(f"Erro ao remover tarefa: {erro}")
+
+
+def pagina_metas(usuario: Dict[str, Any]) -> None:
+    """
+    Metas são visíveis para cada destinatário e para o gerente.
+    Somente o gerente cria, altera e remove.
+    """
+    if not usuario_tem("view_goals"):
+        st.error("Você não tem permissão para acessar metas.")
+        return
+
+    st.title("Metas")
+    st.caption(
+        "As metas podem ser gerais ou destinadas a um usuário específico. "
+        "Somente o gerente pode administrar esta área."
+    )
+
+    usuarios = obter_usuarios_ativos()
+
+    if usuario["tipo"] == "gerente":
+        ids_usuarios = [None] + usuarios["id"].tolist()
+        nomes_usuarios = {None: "Meta geral — todos"}
+        nomes_usuarios.update(
+            dict(zip(usuarios["id"], usuarios["nome"]))
+        )
+
+        with st.expander("➕ Criar nova meta", expanded=True):
+            with st.form("form_criar_meta"):
+                titulo = st.text_input("Nome da meta*")
+                descricao = st.text_area("Descrição")
+                unidade = st.text_input(
+                    "Unidade",
+                    value="vendas",
+                    help="Ex.: vendas, leads, fichas ou reais.",
+                )
+                valor_objetivo = st.number_input(
+                    "Valor objetivo",
+                    min_value=0.0,
+                    step=1.0,
+                )
+                periodo_inicio = st.date_input(
+                    "Início do período",
+                    value=date.today(),
+                )
+                periodo_fim = st.date_input(
+                    "Fim do período",
+                    value=date.today(),
+                )
+                destinatario_id = st.selectbox(
+                    "Destinatário",
+                    options=ids_usuarios,
+                    format_func=lambda valor: nomes_usuarios[valor],
+                )
+                criar = st.form_submit_button(
+                    "Criar meta",
+                    use_container_width=True,
+                    type="primary",
+                )
+
+            if criar:
+                if not titulo.strip():
+                    st.warning("Informe o nome da meta.")
+                elif periodo_fim < periodo_inicio:
+                    st.warning(
+                        "O fim do período não pode ser anterior ao início."
+                    )
+                else:
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(
+                                text(
+                                    """
+                                    INSERT INTO public.metas (
+                                        titulo,
+                                        descricao,
+                                        unidade,
+                                        valor_objetivo,
+                                        periodo_inicio,
+                                        periodo_fim,
+                                        destinatario_id,
+                                        criado_por_id
+                                    )
+                                    VALUES (
+                                        :titulo,
+                                        :descricao,
+                                        :unidade,
+                                        :valor_objetivo,
+                                        :periodo_inicio,
+                                        :periodo_fim,
+                                        :destinatario_id,
+                                        :criado_por_id
+                                    )
+                                    """
+                                ),
+                                {
+                                    "titulo": titulo.strip(),
+                                    "descricao": (
+                                        descricao.strip()
+                                        if descricao.strip()
+                                        else None
+                                    ),
+                                    "unidade": unidade.strip() or "unidade",
+                                    "valor_objetivo": valor_objetivo,
+                                    "periodo_inicio": periodo_inicio,
+                                    "periodo_fim": periodo_fim,
+                                    "destinatario_id": destinatario_id,
+                                    "criado_por_id": usuario["id"],
+                                },
+                            )
+                        st.success("Meta criada.")
+                        st.rerun()
+                    except Exception as erro:
+                        st.error(f"Erro ao criar meta: {erro}")
+
+    try:
+        metas = obter_metas(usuario)
+    except Exception as erro:
+        st.error(
+            "Não foi possível carregar metas. "
+            "Execute primeiro o arquivo schema_metas_tarefas.sql "
+            f"no Supabase. Detalhe: {erro}"
+        )
+        return
+
+    if metas.empty:
+        st.info("Nenhuma meta encontrada.")
+        return
+
+    for _, meta in metas.iterrows():
+        destino = meta.get("destinatario_nome") or "Todos"
+        periodo = (
+            f"{meta.get('periodo_inicio')} até {meta.get('periodo_fim')}"
+        )
+
+        with st.expander(
+            f"🎯 {meta['titulo']}  |  {destino}",
+            expanded=True,
+        ):
+            st.write(meta.get("descricao") or "Sem descrição.")
+            c1, c2, c3 = st.columns(3)
+            c1.metric(
+                f"Objetivo ({meta.get('unidade') or 'unidade'})",
+                meta.get("valor_objetivo") or 0,
+            )
+            c2.write("**Período**")
+            c2.write(periodo)
+            c3.write("**Criada por**")
+            c3.write(meta.get("criador_nome") or "-")
+
+            if usuario["tipo"] == "gerente":
+                st.markdown("---")
+                ids_usuarios = [None] + usuarios["id"].tolist()
+                nomes_usuarios = {None: "Meta geral — todos"}
+                nomes_usuarios.update(
+                    dict(zip(usuarios["id"], usuarios["nome"]))
+                )
+                destinatario_atual = meta.get("destinatario_id")
+                indice_destinatario = (
+                    ids_usuarios.index(destinatario_atual)
+                    if destinatario_atual in ids_usuarios
+                    else 0
+                )
+
+                with st.form(f"form_editar_meta_{meta['id']}"):
+                    novo_titulo = st.text_input(
+                        "Nome",
+                        value=str(meta["titulo"]),
+                    )
+                    nova_descricao = st.text_area(
+                        "Descrição",
+                        value=str(meta.get("descricao") or ""),
+                    )
+                    nova_unidade = st.text_input(
+                        "Unidade",
+                        value=str(meta.get("unidade") or "unidade"),
+                    )
+                    novo_valor = st.number_input(
+                        "Valor objetivo",
+                        min_value=0.0,
+                        value=float(meta.get("valor_objetivo") or 0),
+                        step=1.0,
+                    )
+                    novo_inicio = st.date_input(
+                        "Início",
+                        value=converter_data(meta.get("periodo_inicio")),
+                    )
+                    novo_fim = st.date_input(
+                        "Fim",
+                        value=converter_data(meta.get("periodo_fim")),
+                    )
+                    novo_destinatario = st.selectbox(
+                        "Destinatário",
+                        options=ids_usuarios,
+                        index=indice_destinatario,
+                        format_func=lambda valor: nomes_usuarios[valor],
+                    )
+                    salvar_meta = st.form_submit_button(
+                        "Salvar alteração",
+                        use_container_width=True,
+                    )
+
+                if salvar_meta:
+                    if not novo_titulo.strip():
+                        st.warning("O nome da meta não pode ficar vazio.")
+                    elif novo_fim < novo_inicio:
+                        st.warning(
+                            "O fim do período não pode ser anterior ao início."
+                        )
+                    else:
+                        try:
+                            with engine.begin() as conn:
+                                conn.execute(
+                                    text(
+                                        """
+                                        UPDATE public.metas
+                                        SET
+                                            titulo = :titulo,
+                                            descricao = :descricao,
+                                            unidade = :unidade,
+                                            valor_objetivo = :valor_objetivo,
+                                            periodo_inicio = :periodo_inicio,
+                                            periodo_fim = :periodo_fim,
+                                            destinatario_id = :destinatario_id,
+                                            updated_at = NOW()
+                                        WHERE id = :id
+                                        """
+                                    ),
+                                    {
+                                        "titulo": novo_titulo.strip(),
+                                        "descricao": (
+                                            nova_descricao.strip()
+                                            if nova_descricao.strip()
+                                            else None
+                                        ),
+                                        "unidade": (
+                                            nova_unidade.strip()
+                                            or "unidade"
+                                        ),
+                                        "valor_objetivo": novo_valor,
+                                        "periodo_inicio": novo_inicio,
+                                        "periodo_fim": novo_fim,
+                                        "destinatario_id": novo_destinatario,
+                                        "id": meta["id"],
+                                    },
+                                )
+                            st.success("Meta atualizada.")
+                            st.rerun()
+                        except Exception as erro:
+                            st.error(f"Erro ao atualizar meta: {erro}")
+
+                if st.button(
+                    "🗑️ Remover meta",
+                    key=f"remover_meta_{meta['id']}",
+                ):
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(
+                                text(
+                                    """
+                                    UPDATE public.metas
+                                    SET ativo = FALSE,
+                                        updated_at = NOW()
+                                    WHERE id = :id
+                                    """
+                                ),
+                                {"id": meta["id"]},
+                            )
+                        st.success("Meta removida.")
+                        st.rerun()
+                    except Exception as erro:
+                        st.error(f"Erro ao remover meta: {erro}")
+
+
 # ============================================================
 # EXECUÇÃO PRINCIPAL
 # ============================================================
@@ -1395,6 +2146,12 @@ if usuario_tem("use_chat"):
 if usuario_tem("use_elfen_ai"):
     paginas_permitidas.add("elfen_ai")
 
+if usuario_tem("view_tasks"):
+    paginas_permitidas.add("tarefas")
+
+if usuario_tem("view_goals"):
+    paginas_permitidas.add("metas")
+
 
 if st.session_state["pagina_atual"] not in paginas_permitidas:
     st.session_state["pagina_atual"] = "leads"
@@ -1410,3 +2167,7 @@ elif pagina_atual == "chat":
     pagina_chat(usuario_atual)
 elif pagina_atual == "elfen_ai":
     pagina_elfen_ai()
+elif pagina_atual == "tarefas":
+    pagina_tarefas(usuario_atual)
+elif pagina_atual == "metas":
+    pagina_metas(usuario_atual)
