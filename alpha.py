@@ -2444,7 +2444,7 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                                     valor_financiado_final,
                                     nova_entrada,
                                     nova_parcela_48,
-                                    nova_parcela_64,
+                                    nova_parcela_60,
                                     nova_observacao,
                                 )
                         else:
@@ -2464,8 +2464,8 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                                     f"R$ {float(banco.get('parcela_48') or 0):,.2f}",
                                 )
                                 a4.metric(
-                                    "64x",
-                                    f"R$ {float(banco.get('parcela_64') or 0):,.2f}",
+                                    "60x",
+                                    f"R$ {float(banco.get('parcela_60') or 0):,.2f}",
                                 )
                             if banco.get("observacao"):
                                 st.caption(banco["observacao"])
