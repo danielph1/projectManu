@@ -81,8 +81,6 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "view_goals",
         "view_credit_fichas",
         "edit_bank_results",
-        "edit_sales_boleto",
-        "view_credit_metrics",
     },
     "financeiro": {
         "view_leads",
@@ -304,6 +302,7 @@ def inicializar_sessao():
         "pagina_atual": "leads",
         "chat_vendedor_selecionado": None,
         "abrir_formulario": False,
+        "banco_filtro": None,
     }
 
     for chave, valor in defaults.items():
@@ -915,6 +914,7 @@ def obter_fichas_credito(
     usuario: Dict[str, Any],
     status: str = "todas",
     busca: str = "",
+    banco_filtro: Optional[str] = None,
 ) -> pd.DataFrame:
     if usuario["tipo"] == "vendedor":
         filtro_acesso = "f.vendedor_id = :vendedor_id"
@@ -924,6 +924,39 @@ def obter_fichas_credito(
     else:
         filtro_acesso = "TRUE"
         parametros = {}
+
+    pode_ver_financeiro = usuario["tipo"] in {"financeiro", "gerente"}
+    campos_financeiros = """
+            f.valor_entrada,
+            f.comprou,
+            f.data_compra,
+            f.valor_veiculo,
+            f.valor_financiado,
+            f.banco_contratado,
+            f.valor_liberado,
+            f.entrada_total,
+            f.entrada_paga,
+            f.valor_pendente,
+            f.gerou_boleto,
+            f.boleto_valor,
+            f.boleto_meses,
+            f.boleto_total,
+    """ if pode_ver_financeiro else """
+            NULL::numeric AS valor_entrada,
+            NULL::boolean AS comprou,
+            NULL::date AS data_compra,
+            NULL::numeric AS valor_veiculo,
+            NULL::numeric AS valor_financiado,
+            NULL::varchar AS banco_contratado,
+            NULL::numeric AS valor_liberado,
+            NULL::numeric AS entrada_total,
+            NULL::numeric AS entrada_paga,
+            NULL::numeric AS valor_pendente,
+            NULL::boolean AS gerou_boleto,
+            NULL::numeric AS boleto_valor,
+            NULL::integer AS boleto_meses,
+            NULL::numeric AS boleto_total,
+    """
 
     filtro_status = """
         (
@@ -942,11 +975,22 @@ def obter_fichas_credito(
         )
     """
 
+    filtro_banco = "TRUE"
+    join_banco = ""
+    if banco_filtro:
+        join_banco = """
+            JOIN public.ficha_bancos banco_filtro
+                ON banco_filtro.ficha_id = f.id
+               AND banco_filtro.banco = :banco_filtro
+        """
+        filtro_banco = "banco_filtro.banco = :banco_filtro"
+
     parametros.update(
         {
             "status": status,
             "busca": busca.strip(),
             "termo": f"%{busca.strip()}%",
+            "banco_filtro": banco_filtro,
         }
     )
 
@@ -956,15 +1000,8 @@ def obter_fichas_credito(
             f.id,
             f.lead_id,
             f.vendedor_id,
-            f.valor_entrada,
             f.status_geral,
-            f.comprou,
-            f.data_compra,
-            f.valor_veiculo,
-            f.valor_financiado,
-            f.gerou_boleto,
-            f.boleto_valor,
-            f.boleto_meses,
+            {campos_financeiros}
             f.created_at,
             f.updated_at,
             l.nome_lead,
@@ -980,9 +1017,11 @@ def obter_fichas_credito(
             ON l.id = f.lead_id
         LEFT JOIN public.vendedores v
             ON v.id = f.vendedor_id
+        {join_banco}
         WHERE ({filtro_acesso})
           AND ({filtro_status})
           AND ({filtro_busca})
+          AND ({filtro_banco})
         ORDER BY f.updated_at DESC, f.id DESC
         """
     )
@@ -1002,7 +1041,7 @@ def obter_analises_banco(ficha_id: int) -> pd.DataFrame:
             valor_financiado,
             valor_entrada,
             parcela_48,
-            parcela_60,
+            parcela_64,
             observacao,
             atualizado_por_id,
             updated_at
@@ -1028,6 +1067,46 @@ def obter_analises_banco(ficha_id: int) -> pd.DataFrame:
             conn,
             params={"ficha_id": ficha_id},
         )
+
+
+def obter_fichas_com_valor_pendente() -> pd.DataFrame:
+    query = text(
+        """
+        SELECT
+            f.id,
+            f.lead_id,
+            l.nome_lead,
+            l.nome_completo,
+            l.cpf,
+            l.telefone,
+            l.data_nascimento,
+            l.habilitado,
+            l.produto_interesse,
+            v.nome AS vendedor_nome,
+            f.data_compra,
+            f.valor_veiculo,
+            f.banco_contratado,
+            f.valor_liberado,
+            f.entrada_total,
+            f.entrada_paga,
+            f.valor_pendente,
+            f.boleto_valor,
+            f.boleto_meses,
+            f.boleto_total
+        FROM public.fichas_credito f
+        JOIN public.leads l
+            ON l.id = f.lead_id
+        LEFT JOIN public.vendedores v
+            ON v.id = f.vendedor_id
+        WHERE f.comprou = TRUE
+          AND f.gerou_boleto = TRUE
+          AND f.valor_pendente > 0
+        ORDER BY f.valor_pendente DESC, f.updated_at DESC
+        """
+    )
+
+    with engine.connect() as conn:
+        return pd.read_sql_query(query, conn)
 
 
 def recalcular_status_ficha(conn: Any, ficha_id: int) -> str:
@@ -1091,7 +1170,7 @@ def salvar_analise_banco(
     valor_financiado: Optional[float],
     valor_entrada: Optional[float],
     parcela_48: Optional[float],
-    parcela_60: Optional[float],
+    parcela_64: Optional[float],
     observacao: str,
 ) -> None:
     if not usuario_tem("edit_bank_results"):
@@ -1107,7 +1186,7 @@ def salvar_analise_banco(
         valor_financiado = None
         valor_entrada = None
         parcela_48 = None
-        parcela_60 = None
+        parcela_64 = None
 
     try:
         with engine.begin() as conn:
@@ -1120,7 +1199,7 @@ def salvar_analise_banco(
                         valor_financiado = :valor_financiado,
                         valor_entrada = :valor_entrada,
                         parcela_48 = :parcela_48,
-                        parcela_60 = :parcela_60,
+                        parcela_64 = :parcela_64,
                         observacao = :observacao,
                         atualizado_por_id = :usuario_id,
                         updated_at = NOW()
@@ -1133,7 +1212,7 @@ def salvar_analise_banco(
                     "valor_financiado": valor_financiado,
                     "valor_entrada": valor_entrada,
                     "parcela_48": parcela_48,
-                    "parcela_60": parcela_60,
+                    "parcela_64": parcela_64,
                     "observacao": observacao.strip() or None,
                     "usuario_id": usuario["id"],
                     "banco_id": banco_id,
@@ -1166,18 +1245,15 @@ def salvar_dados_financeiros_ficha(
     comprou: bool,
     data_compra: Optional[date],
     valor_veiculo: Optional[float],
-    valor_financiado: Optional[float],
+    banco_contratado: Optional[str],
+    valor_liberado: Optional[float],
+    entrada_total: Optional[float],
+    entrada_paga: Optional[float],
     gerou_boleto: bool,
     boleto_valor: Optional[float],
     boleto_meses: Optional[int],
 ) -> None:
-    pode_alterar = (
-        usuario_tem("edit_sales_boleto")
-        or (
-            usuario_tem("edit_own_credit_data")
-            and ficha.get("vendedor_id") == usuario.get("vendedor_id")
-        )
-    )
+    pode_alterar = usuario_tem("edit_sales_boleto")
 
     if not pode_alterar:
         st.error("Você não pode alterar esses dados financeiros.")
@@ -1186,11 +1262,26 @@ def salvar_dados_financeiros_ficha(
     if not comprou:
         data_compra = None
         valor_veiculo = None
-        valor_financiado = None
+        banco_contratado = None
+        valor_liberado = 0
+        entrada_total = 0
+        entrada_paga = 0
+        valor_pendente = 0
+        gerou_boleto = False
+    else:
+        entrada_total = max(float(entrada_total or 0), 0)
+        entrada_paga = max(float(entrada_paga or 0), 0)
+        valor_liberado = max(float(valor_liberado or 0), 0)
+        valor_pendente = max(entrada_total - entrada_paga, 0)
 
     if not gerou_boleto:
         boleto_valor = None
         boleto_meses = None
+        boleto_total = 0
+    else:
+        boleto_total = (
+            float(boleto_valor or 0) * int(boleto_meses or 0)
+        )
 
     if gerou_boleto and (
         boleto_valor is None or not boleto_meses or boleto_meses <= 0
@@ -1210,10 +1301,17 @@ def salvar_dados_financeiros_ficha(
                         comprou = :comprou,
                         data_compra = :data_compra,
                         valor_veiculo = :valor_veiculo,
-                        valor_financiado = :valor_financiado,
+                        banco_contratado = :banco_contratado,
+                        valor_liberado = :valor_liberado,
+                        valor_financiado = :valor_liberado,
+                        entrada_total = :entrada_total,
+                        valor_entrada = :entrada_total,
+                        entrada_paga = :entrada_paga,
+                        valor_pendente = :valor_pendente,
                         gerou_boleto = :gerou_boleto,
                         boleto_valor = :boleto_valor,
                         boleto_meses = :boleto_meses,
+                        boleto_total = :boleto_total,
                         atualizado_por_id = :usuario_id,
                         updated_at = NOW()
                     WHERE id = :ficha_id
@@ -1223,10 +1321,15 @@ def salvar_dados_financeiros_ficha(
                     "comprou": comprou,
                     "data_compra": data_compra,
                     "valor_veiculo": valor_veiculo,
-                    "valor_financiado": valor_financiado,
+                    "banco_contratado": banco_contratado,
+                    "valor_liberado": valor_liberado,
+                    "entrada_total": entrada_total,
+                    "entrada_paga": entrada_paga,
+                    "valor_pendente": valor_pendente,
                     "gerou_boleto": gerou_boleto,
                     "boleto_valor": boleto_valor,
                     "boleto_meses": boleto_meses,
+                    "boleto_total": boleto_total,
                     "usuario_id": usuario["id"],
                     "ficha_id": ficha["id"],
                 },
@@ -1273,7 +1376,7 @@ def salvar_dados_cadastrais_ficha(
     data_nascimento: str,
     habilitado: bool,
     carro_interesse: str,
-    valor_entrada: float,
+    valor_entrada: Optional[float],
 ) -> None:
     pode_alterar = (
         usuario_tem("edit_bank_results")
@@ -1291,6 +1394,12 @@ def salvar_dados_cadastrais_ficha(
         st.error("Nome completo e CPF são obrigatórios.")
         return
 
+    valor_entrada_atualizacao = (
+        None
+        if valor_entrada is None
+        else max(float(valor_entrada or 0), 0)
+    )
+
     try:
         with engine.begin() as conn:
             conn.execute(
@@ -1303,7 +1412,10 @@ def salvar_dados_cadastrais_ficha(
                         data_nascimento = :data_nascimento,
                         habilitado = :habilitado,
                         produto_interesse = :produto_interesse,
-                        valor_entrada = :valor_entrada,
+                        valor_entrada = COALESCE(
+                            :valor_entrada,
+                            valor_entrada
+                        ),
                         updated_at = NOW()
                     WHERE id = :lead_id
                     """
@@ -1316,7 +1428,7 @@ def salvar_dados_cadastrais_ficha(
                     "produto_interesse": (
                         carro_interesse.strip() or None
                     ),
-                    "valor_entrada": max(float(valor_entrada or 0), 0),
+                        "valor_entrada": valor_entrada_atualizacao,
                     "lead_id": ficha["lead_id"],
                 },
             )
@@ -1324,14 +1436,17 @@ def salvar_dados_cadastrais_ficha(
                 text(
                     """
                     UPDATE public.fichas_credito
-                    SET valor_entrada = :valor_entrada,
+                    SET valor_entrada = COALESCE(
+                            :valor_entrada,
+                            valor_entrada
+                        ),
                         atualizado_por_id = :usuario_id,
                         updated_at = NOW()
                     WHERE id = :ficha_id
                     """
                 ),
                 {
-                    "valor_entrada": max(float(valor_entrada or 0), 0),
+                    "valor_entrada": valor_entrada_atualizacao,
                     "usuario_id": usuario["id"],
                     "ficha_id": ficha["id"],
                 },
@@ -1348,7 +1463,7 @@ def obter_metricas_credito() -> tuple[pd.DataFrame, Dict[str, Any]]:
         """
         SELECT
             banco,
-            COUNT(*) AS total_fichas,
+            COUNT(DISTINCT ficha_id) AS fichas_analisadas,
             COUNT(*) FILTER (WHERE status = 'aprovado')
                 AS total_aprovados,
             COUNT(*) FILTER (WHERE status = 'negado')
@@ -1378,14 +1493,27 @@ def obter_metricas_credito() -> tuple[pd.DataFrame, Dict[str, Any]]:
                 AS fichas_pendentes,
             COUNT(*) FILTER (WHERE comprou = TRUE)
                 AS total_compras,
-            COALESCE(SUM(valor_veiculo)
-                FILTER (WHERE comprou = TRUE), 0) AS valor_vendas,
-            COUNT(*) FILTER (WHERE gerou_boleto = TRUE)
+            COALESCE(SUM(valor_liberado + entrada_paga)
+                FILTER (WHERE comprou = TRUE), 0) AS valor_vendas_bruto,
+            COALESCE(SUM(valor_liberado)
+                FILTER (WHERE comprou = TRUE), 0) AS valor_liberado,
+            COALESCE(SUM(entrada_paga)
+                FILTER (WHERE comprou = TRUE), 0) AS entrada_paga,
+            COUNT(*) FILTER (
+                WHERE comprou = TRUE AND gerou_boleto = TRUE
+            )
                 AS total_boletos,
-            COALESCE(SUM(boleto_valor)
-                FILTER (WHERE gerou_boleto = TRUE), 0) AS valor_boletos,
-            COALESCE(SUM(boleto_meses)
-                FILTER (WHERE gerou_boleto = TRUE), 0) AS meses_boletos
+            COALESCE(SUM(valor_pendente)
+                FILTER (WHERE comprou = TRUE AND valor_pendente > 0), 0)
+                AS valor_pendente,
+            COALESCE(SUM(boleto_total)
+                FILTER (WHERE comprou = TRUE AND gerou_boleto = TRUE), 0)
+                AS valor_boletos,
+            COUNT(*) FILTER (
+                WHERE comprou = TRUE
+                  AND gerou_boleto = TRUE
+                  AND valor_pendente > 0
+            ) AS clientes_com_valor_pendente
         FROM public.fichas_credito
         """
     )
@@ -2124,9 +2252,16 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
         return
 
     st.title("Fichas de Crédito")
-    st.caption(
-        "Análise por banco, resultado da compra e informações de boleto."
-    )
+    if usuario["tipo"] == "elfen_ai":
+        st.caption(
+            "Dados cadastrais, status da ficha e propostas bancárias."
+        )
+    elif usuario["tipo"] in {"financeiro", "gerente"}:
+        st.caption(
+            "Análise por banco, compras, valores recebidos e boletos."
+        )
+    else:
+        st.caption("Dados cadastrais, status da ficha e propostas bancárias.")
 
     notificacoes = contar_notificacoes_nao_lidas(usuario["id"])
     if notificacoes:
@@ -2161,31 +2296,138 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                 int(geral.get("total_compras") or 0),
             )
             metricas[5].metric(
-                "Boletos",
-                int(geral.get("total_boletos") or 0),
+                "Clientes com pendência",
+                int(geral.get("clientes_com_valor_pendente") or 0),
             )
 
             if not por_banco.empty:
-                st.markdown("#### Aprovação por banco")
+                st.markdown(
+                    "#### Aprovação por banco — clique para abrir as fichas"
+                )
+                colunas_bancos = st.columns(4)
+                for indice, (_, linha_banco) in enumerate(
+                    por_banco.iterrows()
+                ):
+                    banco_nome = linha_banco["banco"]
+                    with colunas_bancos[indice % 4]:
+                        if st.button(
+                            (
+                                f"{banco_nome} • "
+                                f"{int(linha_banco['fichas_analisadas'])} fichas • "
+                                f"{int(linha_banco['total_aprovados'])} aprovadas"
+                            ),
+                            key=f"filtro_banco_{banco_nome}",
+                            use_container_width=True,
+                            type=(
+                                "primary"
+                                if st.session_state.get("banco_filtro")
+                                == banco_nome
+                                else "secondary"
+                            ),
+                        ):
+                            st.session_state["banco_filtro"] = banco_nome
+                            st.rerun()
+
+                if st.session_state.get("banco_filtro"):
+                    banco_selecionado = st.session_state["banco_filtro"]
+                    if st.button(
+                        "Mostrar todos os bancos",
+                        key="limpar_filtro_banco",
+                    ):
+                        st.session_state["banco_filtro"] = None
+                        st.rerun()
+                    st.info(
+                        f"Mostrando fichas do banco: {banco_selecionado}"
+                    )
+
                 st.dataframe(
-                    por_banco,
+                    por_banco.rename(
+                        columns={
+                            "fichas_analisadas": "fichas distintas",
+                            "total_aprovados": "aprovadas",
+                            "total_negados": "negadas",
+                            "total_pendentes": "pendentes",
+                            "taxa_aprovacao": "taxa (%)",
+                        }
+                    ),
                     use_container_width=True,
                     hide_index=True,
                 )
 
-            c_fin_1, c_fin_2, c_fin_3 = st.columns(3)
+            (
+                c_fin_1,
+                c_fin_2,
+                c_fin_3,
+                c_fin_4,
+                c_fin_5,
+                c_fin_6,
+            ) = st.columns(6)
             c_fin_1.metric(
-                "Valor em vendas",
-                f"R$ {float(geral.get('valor_vendas') or 0):,.2f}",
+                "Valor bruto das vendas",
+                f"R$ {numero_seguro(geral.get('valor_vendas_bruto')):,.2f}",
             )
             c_fin_2.metric(
-                "Valor em boletos",
-                f"R$ {float(geral.get('valor_boletos') or 0):,.2f}",
+                "Valor liberado",
+                f"R$ {numero_seguro(geral.get('valor_liberado')):,.2f}",
             )
             c_fin_3.metric(
-                "Meses de boleto",
-                int(geral.get("meses_boletos") or 0),
+                "Entrada já paga",
+                f"R$ {numero_seguro(geral.get('entrada_paga')):,.2f}",
             )
+            c_fin_4.metric(
+                "Total em boletos",
+                f"R$ {numero_seguro(geral.get('valor_boletos')):,.2f}",
+            )
+            c_fin_5.metric(
+                "Valor pendente",
+                f"R$ {numero_seguro(geral.get('valor_pendente')):,.2f}",
+            )
+            c_fin_6.metric(
+                "Clientes com boleto",
+                int(geral.get("total_boletos") or 0),
+            )
+
+            st.caption(
+                "Valor bruto das vendas = valor liberado pelo banco + "
+                "entrada já paga pelo cliente. Isso representa venda bruta, "
+                "não lucro líquido."
+            )
+
+            try:
+                pendentes = obter_fichas_com_valor_pendente()
+                with st.expander(
+                    "💰 Valor pendente — clientes com boleto",
+                    expanded=True,
+                ):
+                    if pendentes.empty:
+                        st.info("Nenhum cliente com valor pendente.")
+                    else:
+                        st.dataframe(
+                            pendentes.rename(
+                                columns={
+                                    "nome_completo": "cliente",
+                                    "telefone": "telefone",
+                                    "data_nascimento": "nascimento",
+                                    "habilitado": "habilitado",
+                                    "produto_interesse": "carro",
+                                    "vendedor_nome": "vendedor",
+                                    "data_compra": "data compra",
+                                    "valor_veiculo": "valor veículo",
+                                    "banco_contratado": "banco",
+                                    "valor_liberado": "liberado",
+                                    "entrada_total": "entrada total",
+                                    "entrada_paga": "entrada paga",
+                                    "valor_pendente": "valor pendente",
+                                    "boleto_valor": "parcela boleto",
+                                    "boleto_meses": "meses",
+                                    "boleto_total": "total boletos",
+                                }
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+            except Exception as erro:
+                st.warning(f"Não foi possível carregar pendências: {erro}")
         except Exception as erro:
             st.warning(
                 "As métricas ainda não estão disponíveis. "
@@ -2217,7 +2459,12 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
     )
 
     try:
-        fichas = obter_fichas_credito(usuario, status, busca)
+        fichas = obter_fichas_credito(
+            usuario,
+            status,
+            busca,
+            st.session_state.get("banco_filtro"),
+        )
     except Exception as erro:
         st.error(
             "Não foi possível carregar as fichas. "
@@ -2263,10 +2510,11 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                 f"**Habilitado:** "
                 f"{'Sim' if ficha.get('habilitado') else 'Não'}"
             )
-            col_cliente_6.write(
-                f"**Entrada solicitada:** "
-                f"R$ {numero_seguro(ficha.get('valor_entrada')):,.2f}"
-            )
+            if usuario["tipo"] in {"financeiro", "gerente"}:
+                col_cliente_6.write(
+                    f"**Entrada solicitada:** "
+                    f"R$ {numero_seguro(ficha.get('valor_entrada')):,.2f}"
+                )
 
             pode_editar_dados = (
                 usuario_tem("edit_bank_results")
@@ -2306,14 +2554,16 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                             "Cliente habilitado",
                             value=bool(ficha.get("habilitado")),
                         )
-                        nova_entrada_ficha = st.number_input(
-                            "Valor de entrada",
-                            min_value=0.0,
-                            value=numero_seguro(
-                                ficha.get("valor_entrada")
-                            ),
-                            step=100.0,
-                        )
+                        nova_entrada_ficha = None
+                        if usuario["tipo"] in {"financeiro", "gerente"}:
+                            nova_entrada_ficha = st.number_input(
+                                "Valor de entrada",
+                                min_value=0.0,
+                                value=numero_seguro(
+                                    ficha.get("valor_entrada")
+                                ),
+                                step=100.0,
+                            )
                         salvar_cadastro = st.form_submit_button(
                             "Salvar dados da ficha",
                             use_container_width=True,
@@ -2333,13 +2583,24 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
 
             st.markdown("### Resultado nos bancos")
             try:
-                bancos = obter_analises_banco(int(ficha["id"]))
+                bancos_todos = obter_analises_banco(int(ficha["id"]))
             except Exception as erro:
                 st.error(f"Erro ao carregar bancos: {erro}")
-                bancos = pd.DataFrame()
+                bancos_todos = pd.DataFrame()
+
+            bancos = bancos_todos
+            banco_filtro_atual = st.session_state.get("banco_filtro")
+            if banco_filtro_atual and not bancos.empty:
+                bancos = bancos[
+                    bancos["banco"] == banco_filtro_atual
+                ]
 
             if bancos.empty:
-                st.warning("Esta ficha ainda não possui bancos cadastrados.")
+                st.warning(
+                    "Esta ficha não possui análise para o banco selecionado."
+                    if banco_filtro_atual
+                    else "Esta ficha ainda não possui bancos cadastrados."
+                )
             else:
                 for _, banco in bancos.iterrows():
                     status_banco = banco.get("status") or "pendente"
@@ -2412,10 +2673,10 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                                     value=numero_banco("parcela_48"),
                                     step=10.0,
                                 )
-                                nova_parcela_60 = b4.number_input(
-                                    "Parcela em 60x",
+                                nova_parcela_64 = b4.number_input(
+                                    "Parcela em 64x",
                                     min_value=0.0,
-                                    value=numero_banco("parcela_60"),
+                                    value=numero_banco("parcela_64"),
                                     step=10.0,
                                 )
                                 nova_observacao = st.text_area(
@@ -2444,7 +2705,7 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                                     valor_financiado_final,
                                     nova_entrada,
                                     nova_parcela_48,
-                                    nova_parcela_60,
+                                    nova_parcela_64,
                                     nova_observacao,
                                 )
                         else:
@@ -2464,27 +2725,57 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                                     f"R$ {float(banco.get('parcela_48') or 0):,.2f}",
                                 )
                                 a4.metric(
-                                    "60x",
-                                    f"R$ {float(banco.get('parcela_60') or 0):,.2f}",
+                                    "64x",
+                                    f"R$ {float(banco.get('parcela_64') or 0):,.2f}",
                                 )
                             if banco.get("observacao"):
                                 st.caption(banco["observacao"])
 
+            pode_ver_financeiro = usuario["tipo"] in {
+                "financeiro",
+                "gerente",
+            }
             pode_financeiro = (
-                usuario_tem("edit_sales_boleto")
-                or (
-                    usuario_tem("edit_own_credit_data")
-                    and ficha.get("vendedor_id")
-                    == usuario.get("vendedor_id")
-                )
+                pode_ver_financeiro
+                and usuario_tem("edit_sales_boleto")
             )
 
-            st.markdown("### Compra e boleto")
+            if usuario["tipo"] == "elfen_ai":
+                st.caption(
+                    "A Elfen AI vê apenas os dados cadastrais, "
+                    "o status da ficha e os resultados dos bancos."
+                )
+            elif pode_ver_financeiro:
+                st.markdown("### Compra e boleto")
             if pode_financeiro:
                 with st.form(f"form_financeiro_ficha_{ficha['id']}"):
                     comprou = st.checkbox(
                         "Cliente comprou?",
                         value=bool(ficha.get("comprou")),
+                    )
+                    analises_aprovadas = (
+                        bancos_todos[
+                            bancos_todos["status"] == "aprovado"
+                        ]["banco"].tolist()
+                        if not bancos_todos.empty
+                        else []
+                    )
+                    bancos_financeiro = [None] + analises_aprovadas
+                    banco_atual = ficha.get("banco_contratado")
+                    if pd.isna(banco_atual):
+                        banco_atual = None
+                    if banco_atual not in bancos_financeiro:
+                        banco_atual = None
+                    banco_contratado = st.selectbox(
+                        "Banco contratado",
+                        options=bancos_financeiro,
+                        index=bancos_financeiro.index(banco_atual),
+                        format_func=lambda valor: (
+                            "Selecione o banco"
+                            if valor is None
+                            else valor
+                        ),
+                        disabled=not comprou,
                     )
                     f1, f2, f3 = st.columns(3)
                     data_compra = f1.date_input(
@@ -2499,18 +2790,48 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                         step=100.0,
                         disabled=not comprou,
                     )
-                    valor_financiado = f3.number_input(
-                        "Valor financiado",
+                    valor_liberado = f3.number_input(
+                        "Valor liberado pelo banco",
                         min_value=0.0,
                         value=numero_seguro(
-                            ficha.get("valor_financiado")
+                            ficha.get(
+                                "valor_liberado",
+                                ficha.get("valor_financiado"),
+                            )
                         ),
                         step=100.0,
                         disabled=not comprou,
                     )
+                    e1, e2 = st.columns(2)
+                    entrada_total = e1.number_input(
+                        "Entrada total exigida",
+                        min_value=0.0,
+                        value=numero_seguro(
+                            ficha.get(
+                                "entrada_total",
+                                ficha.get("valor_entrada"),
+                            )
+                        ),
+                        step=100.0,
+                        disabled=not comprou,
+                    )
+                    entrada_paga = e2.number_input(
+                        "Entrada já paga pelo cliente",
+                        min_value=0.0,
+                        value=numero_seguro(
+                            ficha.get("entrada_paga")
+                        ),
+                        step=100.0,
+                        disabled=not comprou,
+                    )
+                    st.caption(
+                        "Valor pendente calculado: "
+                        f"R$ {max(entrada_total - entrada_paga, 0):,.2f}"
+                    )
                     gerou_boleto = st.checkbox(
                         "Gerou boleto?",
                         value=bool(ficha.get("gerou_boleto")),
+                        disabled=not comprou,
                     )
                     b1, b2 = st.columns(2)
                     boleto_valor = b1.number_input(
@@ -2518,7 +2839,7 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                         min_value=0.0,
                         value=numero_seguro(ficha.get("boleto_valor")),
                         step=10.0,
-                        disabled=not gerou_boleto,
+                        disabled=not gerou_boleto or not comprou,
                     )
                     boleto_meses = b2.number_input(
                         "Quantidade de meses",
@@ -2527,8 +2848,13 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                             ficha.get("boleto_meses")
                         ),
                         step=1,
-                        disabled=not gerou_boleto,
+                        disabled=not gerou_boleto or not comprou,
                     )
+                    if gerou_boleto and comprou:
+                        st.caption(
+                            "Total previsto em boletos: "
+                            f"R$ {boleto_valor * boleto_meses:,.2f}"
+                        )
                     salvar_financeiro = st.form_submit_button(
                         "Salvar compra e boleto",
                         use_container_width=True,
@@ -2541,14 +2867,29 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                         comprou,
                         data_compra if comprou else None,
                         valor_veiculo if comprou else None,
-                        valor_financiado if comprou else None,
+                        banco_contratado if comprou else None,
+                        valor_liberado if comprou else None,
+                        entrada_total if comprou else None,
+                        entrada_paga if comprou else None,
                         gerou_boleto,
                         boleto_valor if gerou_boleto else None,
                         boleto_meses if gerou_boleto else None,
                     )
-            else:
+            elif pode_ver_financeiro:
                 st.write(
                     f"**Comprou:** {'Sim' if ficha.get('comprou') else 'Não'}"
+                )
+                st.write(
+                    f"**Valor liberado:** "
+                    f"R$ {numero_seguro(ficha.get('valor_liberado')):,.2f}"
+                )
+                st.write(
+                    f"**Entrada paga:** "
+                    f"R$ {numero_seguro(ficha.get('entrada_paga')):,.2f}"
+                )
+                st.write(
+                    f"**Valor pendente:** "
+                    f"R$ {numero_seguro(ficha.get('valor_pendente')):,.2f}"
                 )
                 st.write(
                     f"**Boleto:** "
