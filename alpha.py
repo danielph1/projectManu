@@ -1041,7 +1041,7 @@ def obter_analises_banco(ficha_id: int) -> pd.DataFrame:
             valor_financiado,
             valor_entrada,
             parcela_48,
-            parcela_64,
+            parcela_60,
             observacao,
             atualizado_por_id,
             updated_at
@@ -1170,7 +1170,7 @@ def salvar_analise_banco(
     valor_financiado: Optional[float],
     valor_entrada: Optional[float],
     parcela_48: Optional[float],
-    parcela_64: Optional[float],
+    parcela_60: Optional[float],
     observacao: str,
 ) -> None:
     if not usuario_tem("edit_bank_results"):
@@ -1186,7 +1186,7 @@ def salvar_analise_banco(
         valor_financiado = None
         valor_entrada = None
         parcela_48 = None
-        parcela_64 = None
+        parcela_60 = None
 
     try:
         with engine.begin() as conn:
@@ -1199,7 +1199,7 @@ def salvar_analise_banco(
                         valor_financiado = :valor_financiado,
                         valor_entrada = :valor_entrada,
                         parcela_48 = :parcela_48,
-                        parcela_64 = :parcela_64,
+                        parcela_60 = :parcela_60,
                         observacao = :observacao,
                         atualizado_por_id = :usuario_id,
                         updated_at = NOW()
@@ -1212,7 +1212,7 @@ def salvar_analise_banco(
                     "valor_financiado": valor_financiado,
                     "valor_entrada": valor_entrada,
                     "parcela_48": parcela_48,
-                    "parcela_64": parcela_64,
+                    "parcela_60": parcela_60,
                     "observacao": observacao.strip() or None,
                     "usuario_id": usuario["id"],
                     "banco_id": banco_id,
@@ -2673,10 +2673,10 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                                     value=numero_banco("parcela_48"),
                                     step=10.0,
                                 )
-                                nova_parcela_64 = b4.number_input(
-                                    "Parcela em 64x",
+                                nova_parcela_60 = b4.number_input(
+                                    "Parcela em 60x",
                                     min_value=0.0,
-                                    value=numero_banco("parcela_64"),
+                                    value=numero_banco("parcela_60"),
                                     step=10.0,
                                 )
                                 nova_observacao = st.text_area(
@@ -2705,7 +2705,7 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                                     valor_financiado_final,
                                     nova_entrada,
                                     nova_parcela_48,
-                                    nova_parcela_64,
+                                    nova_parcela_60,
                                     nova_observacao,
                                 )
                         else:
@@ -2725,8 +2725,8 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                                     f"R$ {float(banco.get('parcela_48') or 0):,.2f}",
                                 )
                                 a4.metric(
-                                    "64x",
-                                    f"R$ {float(banco.get('parcela_64') or 0):,.2f}",
+                                    "60x",
+                                    f"R$ {float(banco.get('parcela_60') or 0):,.2f}",
                                 )
                             if banco.get("observacao"):
                                 st.caption(banco["observacao"])
