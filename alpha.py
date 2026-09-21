@@ -1260,46 +1260,36 @@ def salvar_dados_financeiros_ficha(
         return
 
     if not comprou:
-            data_compra = None
-            valor_veiculo = None
-            banco_contratado = None
-            valor_liberado = 0
-            entrada_total = 0
-            entrada_paga = 0
-            valor_pendente = 0
-            gerou_boleto = False
-            boleto_valor = None
-            boleto_meses = None
-            boleto_total = 0
+        data_compra = None
+        valor_veiculo = None
+        banco_contratado = None
+        valor_liberado = 0
+        entrada_total = 0
+        entrada_paga = 0
+        valor_pendente = 0
+        gerou_boleto = False
     else:
-            entrada_total = max(float(entrada_total or 0), 0)
-            entrada_paga = max(float(entrada_paga or 0), 0)
-            valor_liberado = max(float(valor_liberado or 0), 0)
-            valor_veiculo = max(float(valor_veiculo or 0), 0)
+        entrada_total = max(float(entrada_total or 0), 0)
+        entrada_paga = max(float(entrada_paga or 0), 0)
+        valor_liberado = max(float(valor_liberado or 0), 0)
+        valor_pendente = max(entrada_total - entrada_paga, 0)
 
-            # Restante real da venda (o que a empresa precisa receber além do banco + entrada)
-            restante_venda = max(valor_veiculo - valor_liberado - entrada_total, 0)
+    if not gerou_boleto:
+        boleto_valor = None
+        boleto_meses = None
+        boleto_total = 0
+    else:
+        boleto_total = (
+            float(boleto_valor or 0) / int(boleto_meses or 0)
+        )
 
-            if not gerou_boleto:
-                boleto_valor = None
-                boleto_meses = None
-                boleto_total = 0
-                # Pendente só da entrada
-                valor_pendente = max(entrada_total - entrada_paga, 0)
-            else:
-                # Validação obrigatória
-                if boleto_valor is None or not boleto_meses or boleto_meses <= 0:
-                    st.error("Informe o valor e a quantidade de meses do boleto.")
-                    return
-
-                # Total do boleto = restante real da venda (remove a arbitrariedade)
-                boleto_total = restante_venda
-
-                # Recalcula a parcela mensal automaticamente
-                boleto_valor = boleto_total / int(boleto_meses) if boleto_meses else 0
-
-                # Valor pendente = restante do boleto + o que ainda falta da entrada
-                valor_pendente = boleto_total + max(entrada_total - entrada_paga, 0)
+    if gerou_boleto and (
+        boleto_valor is None or not boleto_meses or boleto_meses <= 0
+    ):
+        st.error(
+            "Informe o valor e a quantidade de meses do boleto."
+        )
+        return
 
     try:
         with engine.begin() as conn:
@@ -2863,7 +2853,7 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                     if gerou_boleto and comprou:
                         st.caption(
                             "Total previsto em boletos: "
-                            f"R$ {boleto_valor / boleto_meses:,.2f}"
+                            f"R$ {boleto_valor * boleto_meses:,.2f}"
                         )
                     salvar_financeiro = st.form_submit_button(
                         "Salvar compra e boleto",
