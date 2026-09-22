@@ -437,6 +437,14 @@ def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
                 WHERE
                     COALESCE(l.venda_concluida, FALSE) = TRUE
                     OR COALESCE(l.vendeu, FALSE) = TRUE
+            ) AS total_vendidos,
+            COUNT(l.id) FILTER (
+                WHERE COALESCE(l.responderam, FALSE) = TRUE
+            ) AS total_responderam,
+            COUNT(l.id) FILTER (
+                WHERE
+                    COALESCE(l.venda_concluida, FALSE) = TRUE
+                    OR COALESCE(l.vendeu, FALSE) = TRUE
             ) AS total_vendidos
         FROM public.leads l
         WHERE {condicao}
@@ -452,6 +460,7 @@ def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
             "total_fichas": int(result["total_fichas"] or 0),
             "total_aprovados": int(result["total_aprovados"] or 0),
             "total_vendidos": int(result["total_vendidos"] or 0),
+            "total_responderam": int(result["total_responderam"] or 0),
         }
     except Exception as erro:
         st.error(f"Erro nas métricas: {erro}")
@@ -480,6 +489,7 @@ def buscar_leads(
             OR (:categoria = 'vendidos' AND (
                 l.venda_concluida = TRUE OR l.vendeu = TRUE
             ))
+            OR (:categoria = 'responderam' AND l.responderam = TRUE)
         )
         """,
         """
@@ -511,6 +521,7 @@ def buscar_leads(
             l.gerou_ficha,
             l.venda_concluida,
             l.vendeu,
+            1.respondeu
             l.cpf,
             l.data_nascimento,
             l.habilitado,
