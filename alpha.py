@@ -437,14 +437,6 @@ def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
                 WHERE
                     COALESCE(l.venda_concluida, FALSE) = TRUE
                     OR COALESCE(l.vendeu, FALSE) = TRUE
-            ) AS total_vendidos,
-            COUNT(l.id) FILTER (
-                WHERE COALESCE(l.responderam, FALSE) = TRUE
-            ) AS total_responderam,
-            COUNT(l.id) FILTER (
-                WHERE
-                    COALESCE(l.venda_concluida, FALSE) = TRUE
-                    OR COALESCE(l.vendeu, FALSE) = TRUE
             ) AS total_vendidos
         FROM public.leads l
         WHERE {condicao}
@@ -460,7 +452,6 @@ def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
             "total_fichas": int(result["total_fichas"] or 0),
             "total_aprovados": int(result["total_aprovados"] or 0),
             "total_vendidos": int(result["total_vendidos"] or 0),
-            "total_responderam": int(result["total_responderam"] or 0),
         }
     except Exception as erro:
         st.error(f"Erro nas métricas: {erro}")
@@ -489,7 +480,6 @@ def buscar_leads(
             OR (:categoria = 'vendidos' AND (
                 l.venda_concluida = TRUE OR l.vendeu = TRUE
             ))
-            OR (:categoria = 'responderam' AND l.responderam = TRUE)
         )
         """,
         """
@@ -521,7 +511,6 @@ def buscar_leads(
             l.gerou_ficha,
             l.venda_concluida,
             l.vendeu,
-            1.respondeu
             l.cpf,
             l.data_nascimento,
             l.habilitado,
@@ -2228,10 +2217,7 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
             ) AS total_aprovados,
             COUNT(l.id) FILTER (
                 WHERE l.venda_concluida = TRUE OR l.vendeu = TRUE
-            ) AS total_vendas,
-            COUNT(l.id) FILTER (
-                WHERE l.responderam = TRUE OR l.respondeu = TRUE
-            ) AS total_responderam
+            ) AS total_vendas
         FROM public.vendedores v
         LEFT JOIN public.leads l
             ON l.vendedor_id = v.id
@@ -2255,12 +2241,11 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
     for _, row in df.iterrows():
         with st.container(border=True):
             st.subheader(row["nome"])
-            col1, col2, col3, col4, col5 = st.columns(5)
+            col1, col2, col3, col4 = st.columns(4)
             col1.metric("Leads", int(row["total_leads"]))
             col2.metric("Fichas", int(row["total_fichas"]))
             col3.metric("Aprovados", int(row["total_aprovados"]))
             col4.metric("Vendas", int(row["total_vendas"]))
-            col5.metric("Responderam", int(row["total_responderam"]))
 
 
 def pagina_fichas(usuario: Dict[str, Any]) -> None:
