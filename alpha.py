@@ -2219,7 +2219,7 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
                 WHERE l.venda_concluida = TRUE OR l.vendeu = TRUE
             ) AS total_vendas,
             COUNT(l.id) FILTER (
-                WHERE l.venda_concluida = TRUE OR l.respondeu = TRUE
+                WHERE l.responderam = TRUE OR l.respondeu = TRUE
             ) AS total_responderam
         FROM public.vendedores v
         LEFT JOIN public.leads l
