@@ -2144,7 +2144,7 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
     c4.metric("Vendidos", metricas["total_vendidos"])
     c5.metric("Responderam", metricas["total_responderam"])
 
-    filtros = ["todos", "fichas", "aprovados", "vendidos", "responderam"]
+    filtros = ["todos", "fichas", "aprovados", "vendidos"]
     filtro_atual = st.session_state["filtro_categoria"]
 
     filtro = st.radio(
@@ -2159,7 +2159,6 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
             "fichas": "Fichas",
             "aprovados": "Aprovados",
             "vendidos": "Vendidos",
-            "responderam": "Responderam",
         }[valor],
     )
     st.session_state["filtro_categoria"] = filtro
