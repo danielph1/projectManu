@@ -2396,7 +2396,7 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
             try:
                 pendentes = obter_fichas_com_valor_pendente()
                 with st.expander(
-                    "💰 Valor pendente — clientes com boleto",
+                    "Valor pendente — clientes com boleto",
                     expanded=True,
                 ):
                     if pendentes.empty:
