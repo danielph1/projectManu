@@ -2137,13 +2137,14 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
     st.title("Painel de Controle")
 
     metricas = obter_metricas(usuario)
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5= st.columns(4)
     c1.metric("Total de leads", metricas["total_leads"])
     c2.metric("Fichas geradas", metricas["total_fichas"])
     c3.metric("Aprovados", metricas["total_aprovados"])
     c4.metric("Vendidos", metricas["total_vendidos"])
+    c5.metric("Responderam", metricas["total_responderam"])
 
-    filtros = ["todos", "fichas", "aprovados", "vendidos"]
+    filtros = ["todos", "fichas", "aprovados", "vendidos", "responderam"]
     filtro_atual = st.session_state["filtro_categoria"]
 
     filtro = st.radio(
@@ -2158,6 +2159,7 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
             "fichas": "Fichas",
             "aprovados": "Aprovados",
             "vendidos": "Vendidos",
+            "responderam": "Responderam",
         }[valor],
     )
     st.session_state["filtro_categoria"] = filtro
@@ -2215,7 +2217,10 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
             ) AS total_aprovados,
             COUNT(l.id) FILTER (
                 WHERE l.venda_concluida = TRUE OR l.vendeu = TRUE
-            ) AS total_vendas
+            ) AS total_vendas,
+            COUNT(l.id) FILTER (
+                WHERE l.venda_concluida = TRUE OR l.respondeu = TRUE
+            ) AS total_responderam
         FROM public.vendedores v
         LEFT JOIN public.leads l
             ON l.vendedor_id = v.id
@@ -2239,11 +2244,12 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
     for _, row in df.iterrows():
         with st.container(border=True):
             st.subheader(row["nome"])
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("Leads", int(row["total_leads"]))
             col2.metric("Fichas", int(row["total_fichas"]))
             col3.metric("Aprovados", int(row["total_aprovados"]))
             col4.metric("Vendas", int(row["total_vendas"]))
+            col5.metric("Responderam", int(row["total_responderam"]))
 
 
 def pagina_fichas(usuario: Dict[str, Any]) -> None:
