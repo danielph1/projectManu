@@ -2852,7 +2852,7 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                     )
                     if gerou_boleto and comprou:
                         st.caption(
-                            "Total previsto em boletos: "
+                            "Total mensal de boletos: "
                             f"R$ {boleto_valor / boleto_meses:,.2f}"
                         )
                     salvar_financeiro = st.form_submit_button(
