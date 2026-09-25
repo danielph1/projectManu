@@ -512,6 +512,7 @@ def buscar_leads(
             "AND l.aprovou_credito = TRUE"
         ),
         "responderam": "l.respondeu = TRUE",
+        "nao_responderam": "COALESCE(l.respondeu, FALSE) = FALSE",
         "vendidos": (
             "l.venda_concluida = TRUE OR l.vendeu = TRUE"
         ),
@@ -530,6 +531,8 @@ def buscar_leads(
                 OR l.cpf ILIKE :termo
                 OR l.telefone ILIKE :termo
                 OR l.observacao ILIKE :termo
+                OR l.carro_selecionado ILIKE :termo
+                OR l.placa_carro ILIKE :termo
             )
             """
         )
@@ -560,6 +563,10 @@ def buscar_leads(
             l.data_nascimento,
             l.habilitado,
             l.aprovou_credito,
+            l.carro_selecionado,
+            l.ano_carro,
+            l.placa_carro,
+            l.valor_carro,
             l.observacao,
             l.valor_entrada,
             l.updated_at,
@@ -1310,6 +1317,10 @@ def obter_fichas_credito(
             l.data_nascimento,
             l.habilitado,
             l.produto_interesse,
+            l.carro_selecionado,
+            l.ano_carro,
+            l.placa_carro,
+            l.valor_carro,
             l.telefone,
             v.nome AS vendedor_nome
         FROM public.fichas_credito f
@@ -1382,6 +1393,10 @@ def obter_fichas_com_valor_pendente() -> pd.DataFrame:
             l.data_nascimento,
             l.habilitado,
             l.produto_interesse,
+            l.carro_selecionado,
+            l.ano_carro,
+            l.placa_carro,
+            l.valor_carro,
             v.nome AS vendedor_nome,
             f.data_compra,
             f.valor_veiculo,
@@ -1425,6 +1440,10 @@ def obter_fichas_documentais() -> pd.DataFrame:
             l.telefone,
             l.data_nascimento,
             l.produto_interesse,
+            l.carro_selecionado,
+            l.ano_carro,
+            l.placa_carro,
+            l.valor_carro,
             l.venda_concluida,
             l.vendeu,
             v.nome AS vendedor_nome,
@@ -1822,6 +1841,7 @@ def salvar_dados_cadastrais_ficha(
                         data_nascimento = :data_nascimento,
                         habilitado = :habilitado,
                         produto_interesse = :produto_interesse,
+                        carro_selecionado = :produto_interesse,
                         valor_entrada = COALESCE(
                             :valor_entrada,
                             valor_entrada
@@ -2017,6 +2037,44 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
             "Data de nascimento",
             value=str(lead_data.get("data_nascimento") or ""),
         )
+        novo_carro_selecionado = None
+        novo_ano_carro = None
+        nova_placa_carro = None
+        novo_valor_carro = None
+        if gerou_ficha:
+            st.markdown("### 🚗 Veículo da ficha")
+            ficha_col_1, ficha_col_2 = st.columns(2)
+            with ficha_col_1:
+                novo_carro_selecionado = st.text_input(
+                    "Carro selecionado*",
+                    value=str(
+                        lead_data.get("carro_selecionado")
+                        or lead_data.get("produto_interesse")
+                        or ""
+                    ),
+                )
+                nova_placa_carro = st.text_input(
+                    "Placa do carro*",
+                    value=str(lead_data.get("placa_carro") or ""),
+                    placeholder="ABC1D23",
+                    max_chars=8,
+                )
+            with ficha_col_2:
+                novo_ano_carro = st.number_input(
+                    "Ano do carro*",
+                    min_value=1900,
+                    max_value=2100,
+                    step=1,
+                    value=(
+                        inteiro_seguro(lead_data.get("ano_carro"), 2026)
+                    ),
+                )
+                novo_valor_carro = st.number_input(
+                    "Valor do carro*",
+                    min_value=0.0,
+                    step=1000.0,
+                    value=numero_seguro(lead_data.get("valor_carro")),
+                )
         nova_observacao = st.text_area(
             "Observações",
             value=str(lead_data.get("observacao") or ""),
@@ -2030,6 +2088,24 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
 
     if not salvar:
         return
+
+    if gerou_ficha and (
+        not novo_carro_selecionado
+        or not nova_placa_carro
+        or not novo_ano_carro
+        or novo_valor_carro <= 0
+    ):
+        st.warning(
+            "Ao gerar a ficha, informe carro selecionado, placa, ano "
+            "e valor do carro."
+        )
+        return
+
+    nova_placa_carro = (
+        nova_placa_carro.strip().replace("-", "").replace(" ", "").upper()
+        if gerou_ficha and nova_placa_carro
+        else None
+    )
 
     def vazio_para_none(valor: Any) -> Optional[str]:
         valor = str(valor or "").strip()
@@ -2054,6 +2130,11 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                 END,
                 cpf = :cpf,
                 data_nascimento = :data_nascimento,
+                produto_interesse = :carro_selecionado,
+                carro_selecionado = :carro_selecionado,
+                ano_carro = :ano_carro,
+                placa_carro = :placa_carro,
+                valor_carro = :valor_carro,
                 observacao = :observacao,
                 updated_at = NOW()
             WHERE id = :lead_id
@@ -2087,6 +2168,16 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                     "cpf": vazio_para_none(novo_cpf),
                     "data_nascimento": vazio_para_none(
                         nova_data_nascimento
+                    ),
+                    "carro_selecionado": (
+                        vazio_para_none(novo_carro_selecionado)
+                        if gerou_ficha
+                        else None
+                    ),
+                    "ano_carro": novo_ano_carro if gerou_ficha else None,
+                    "placa_carro": nova_placa_carro,
+                    "valor_carro": (
+                        novo_valor_carro if gerou_ficha else None
                     ),
                     "observacao": vazio_para_none(nova_observacao),
                     "lead_id": lead_data["id"],
@@ -2352,7 +2443,6 @@ def mostrar_formulario_novo_lead(
         cpf = None
         data_nascimento = None
         habilitado = None
-        carro_interesse = None
         valor_entrada = None
         anexos_ficha = []
 
@@ -2367,7 +2457,15 @@ def mostrar_formulario_novo_lead(
                     value=nome,
                 )
                 data_nascimento = st.text_input("Data de nascimento")
-                carro_interesse = st.text_input("Carro de interesse")
+                carro_selecionado = st.text_input(
+                    "Carro selecionado*",
+                    help="Veículo escolhido para esta ficha.",
+                )
+                placa_carro = st.text_input(
+                    "Placa do carro*",
+                    placeholder="ABC1D23",
+                    max_chars=8,
+                )
 
             with col_ficha_2:
                 habilitado = st.radio(
@@ -2379,6 +2477,18 @@ def mostrar_formulario_novo_lead(
                     "Valor de entrada",
                     min_value=0.0,
                     step=100.0,
+                )
+                ano_carro = st.number_input(
+                    "Ano do carro*",
+                    min_value=1900,
+                    max_value=2100,
+                    step=1,
+                    value=2026,
+                )
+                valor_carro = st.number_input(
+                    "Valor do carro*",
+                    min_value=0.0,
+                    step=1000.0,
                 )
             anexos_ficha = st.file_uploader(
                 "Documentos da ficha",
@@ -2415,6 +2525,24 @@ def mostrar_formulario_novo_lead(
         st.warning("Preencha nome, telefone e vendedor.")
         return
 
+    if gerou_ficha and (
+        not carro_selecionado.strip()
+        or not placa_carro.strip()
+        or not ano_carro
+        or valor_carro <= 0
+    ):
+        st.warning(
+            "Ao gerar a ficha, informe carro selecionado, placa, ano "
+            "e valor do carro."
+        )
+        return
+
+    placa_carro_normalizada = (
+        placa_carro.strip().replace("-", "").replace(" ", "").upper()
+        if gerou_ficha
+        else None
+    )
+
     try:
         query = text(
             """
@@ -2431,6 +2559,10 @@ def mostrar_formulario_novo_lead(
                 habilitado,
                 aprovou_credito,
                 produto_interesse,
+                carro_selecionado,
+                ano_carro,
+                placa_carro,
+                valor_carro,
                 valor_entrada,
                 observacao,
                 created_at,
@@ -2449,6 +2581,10 @@ def mostrar_formulario_novo_lead(
                 :habilitado,
                 :aprovou_credito,
                 :produto_interesse,
+                :carro_selecionado,
+                :ano_carro,
+                :placa_carro,
+                :valor_carro,
                 :valor_entrada,
                 :observacao,
                 NOW(),
@@ -2482,10 +2618,18 @@ def mostrar_formulario_novo_lead(
                     "habilitado": habilitado,
                     "aprovou_credito": None,
                     "produto_interesse": (
-                        carro_interesse.strip()
-                        if gerou_ficha and carro_interesse
+                        carro_selecionado.strip()
+                        if gerou_ficha and carro_selecionado
                         else None
                     ),
+                    "carro_selecionado": (
+                        carro_selecionado.strip()
+                        if gerou_ficha
+                        else None
+                    ),
+                    "ano_carro": ano_carro if gerou_ficha else None,
+                    "placa_carro": placa_carro_normalizada,
+                    "valor_carro": valor_carro if gerou_ficha else None,
                     "valor_entrada": (
                         valor_entrada
                         if gerou_ficha
@@ -2546,6 +2690,16 @@ def mostrar_card_lead(
         st.write(
             f"**Data do lead:** "
             f"{formatar_data_br(row.get('data_lead'))}"
+        )
+        st.write(
+            f"**Carro selecionado:** "
+            f"{row.get('carro_selecionado') or row.get('produto_interesse') or '-'}"
+        )
+        st.write(
+            f"**Ano / placa / valor:** "
+            f"{row.get('ano_carro') or '-'} / "
+            f"{row.get('placa_carro') or '-'} / "
+            f"R$ {numero_seguro(row.get('valor_carro')):,.2f}"
         )
         st.write(
             f"**Ficha gerada:** "
@@ -2670,10 +2824,21 @@ def pagina_documentista(usuario: Dict[str, Any]) -> None:
                 f"**Nascimento:** "
                 f"{formatar_data_br(ficha.get('data_nascimento'))}"
             )
-            c5.write(f"**Carro:** {ficha.get('produto_interesse') or '-'}")
+            c5.write(
+                f"**Carro:** "
+                f"{ficha.get('carro_selecionado') or ficha.get('produto_interesse') or '-'}"
+            )
             c6.write(
-                f"**Venda:** "
-                f"{formatar_data_br(ficha.get('data_compra'))}"
+                f"**Ano / placa:** "
+                f"{ficha.get('ano_carro') or '-'} / "
+                f"{ficha.get('placa_carro') or '-'}"
+            )
+            st.write(
+                f"**Valor do carro:** "
+                f"R$ {numero_seguro(ficha.get('valor_carro')):,.2f}"
+            )
+            st.caption(
+                f"Venda: {formatar_data_br(ficha.get('data_compra'))}"
             )
             mostrar_anexos_ficha(
                 int(ficha["ficha_id"]),
@@ -2717,7 +2882,14 @@ def pagina_documentista(usuario: Dict[str, Any]) -> None:
 def pagina_leads(usuario: Dict[str, Any]) -> None:
     st.title("Painel de Controle")
 
-    filtros = ["todos", "fichas", "aprovados", "responderam", "vendidos"]
+    filtros = [
+        "todos",
+        "fichas",
+        "aprovados",
+        "responderam",
+        "nao_responderam",
+        "vendidos",
+    ]
     filtro_atual = st.session_state["filtro_categoria"]
 
     filtro = st.radio(
@@ -2732,6 +2904,7 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
             "fichas": "Fichas",
             "aprovados": "Aprovados",
             "responderam": "Responderam",
+            "nao_responderam": "Não responderam",
             "vendidos": "Vendidos",
         }[valor],
     )
@@ -3171,7 +3344,8 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
             col_cliente_1.write(f"**Vendedor:** {ficha.get('vendedor_nome') or '-'}")
             col_cliente_2.write(f"**CPF:** {ficha.get('cpf') or '-'}")
             col_cliente_3.write(
-                f"**Carro:** {ficha.get('produto_interesse') or '-'}"
+                f"**Carro selecionado:** "
+                f"{ficha.get('carro_selecionado') or ficha.get('produto_interesse') or '-'}"
             )
 
             col_cliente_4, col_cliente_5, col_cliente_6 = st.columns(3)
@@ -3188,6 +3362,18 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                     f"**Entrada solicitada:** "
                     f"R$ {numero_seguro(ficha.get('valor_entrada')):,.2f}"
                 )
+
+            col_veiculo_1, col_veiculo_2, col_veiculo_3 = st.columns(3)
+            col_veiculo_1.write(
+                f"**Ano do carro:** {ficha.get('ano_carro') or '-'}"
+            )
+            col_veiculo_2.write(
+                f"**Placa:** {ficha.get('placa_carro') or '-'}"
+            )
+            col_veiculo_3.write(
+                f"**Valor do carro:** "
+                f"R$ {numero_seguro(ficha.get('valor_carro')):,.2f}"
+            )
 
             pode_editar_dados = (
                 usuario["tipo"] in {"gerente", "elfen_ai"}
@@ -3218,9 +3404,11 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                             ),
                         )
                         novo_carro = d4.text_input(
-                            "Carro de interesse",
+                            "Carro selecionado",
                             value=str(
-                                ficha.get("produto_interesse") or ""
+                                ficha.get("carro_selecionado")
+                                or ficha.get("produto_interesse")
+                                or ""
                             ),
                         )
                         novo_habilitado = st.checkbox(
@@ -4540,7 +4728,7 @@ if pagina_atual == "leads":
     else:
         pagina_leads(usuario_atual)
 elif pagina_atual == "documentos":
-    pagina_documentista(usuario_atual)
+    pagina_documentista(usuario_atual)git
 elif pagina_atual == "vendedores":
     pagina_vendedores(usuario_atual)
 elif pagina_atual == "chat":
