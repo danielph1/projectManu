@@ -4728,7 +4728,7 @@ if pagina_atual == "leads":
     else:
         pagina_leads(usuario_atual)
 elif pagina_atual == "documentos":
-    pagina_documentista(usuario_atual)git
+    pagina_documentista(usuario_atual)
 elif pagina_atual == "vendedores":
     pagina_vendedores(usuario_atual)
 elif pagina_atual == "chat":
