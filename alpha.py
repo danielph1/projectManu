@@ -2167,8 +2167,7 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
             "todos": "Todos",
             "fichas": "Fichas",
             "aprovados": "Aprovados",
-            "vendidos": "Vendidos",
-            "respondeu": "Responderam",
+            "vendidos": "Vendidos"
         }[valor],
     )
     st.session_state["filtro_categoria"] = filtro
