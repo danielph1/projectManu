@@ -2317,7 +2317,7 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
 
         if usuario_tem("view_stock"):
             if st.button(
-                "🚗 Estoque",
+                "Estoque",
                 use_container_width=True,
                 type="primary" if pagina == "estoque" else "secondary",
             ):
@@ -3276,7 +3276,7 @@ def mostrar_lista_estoque(
     ):
         carros = grupos[marca]
         with st.expander(
-            f"🚘 {marca} ({len(carros)})",
+            f"{marca} ({len(carros)})",
             expanded=False,
         ):
             for carro in carros:

@@ -18,9 +18,9 @@ engine = create_engine(DB_URL)
 # ============================================================
 
 MARCAS_CONHECIDAS = [
-    "AUDI", "BMW", "CHEVROLET", "CITROEN", "CITROËN", "FIAT", "FORD",
+"AUDI", "BMW", "CHEVROLET", "CITROEN", "CITROËN", "FIAT", "FORD",
     "HONDA", "HYUNDAI", "JEEP", "KIA", "MERCEDES", "MERCEDES-BENZ",
-    "NISSAN", "PEUGEOT", "RENAULT", "TOYOTA", "VOLKSWAGEN", "VW", "VOLVO"
+    "NISSAN", "PEUGEOT", "RENAULT", "TOYOTA", "VOLKSWAGEN", "VW", "VOLKS", "VOLVO"
 ]
 
 def limpar_texto(valor):
@@ -34,7 +34,18 @@ def limpar_texto(valor):
 def limpar_preco(valor):
     if pd.isna(valor) or valor is None:
         return None
-    texto = str(valor).replace("R$", "").replace(".", "").replace(",", ".").strip()
+
+    # Se já veio como número do Excel
+    if isinstance(valor, (int, float)):
+        return float(valor)
+
+    texto = str(valor).strip()
+    texto = texto.replace("R$", "").replace(" ", "")
+
+    # Formato brasileiro: 99.900,00 → 99900.00
+    if "," in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+
     try:
         return float(texto)
     except:
@@ -54,9 +65,9 @@ def main():
     response.raise_for_status()
 
     wb = load_workbook(filename=BytesIO(response.content), data_only=True)
-    
+
     print("Abas encontradas:", wb.sheetnames)
-    
+
     if "TABELA DE ESTOQUE" in wb.sheetnames:
         ws = wb["TABELA DE ESTOQUE"]
     else:
@@ -81,12 +92,13 @@ def main():
         if not col0:
             continue
 
-        # Detecção de marca mais segura
+        # Detecta marca
         if col0.upper() in MARCAS_CONHECIDAS:
             marca_atual = col0.upper()
             print(f"→ Marca: {marca_atual}")
             continue
 
+        # Pula cabeçalhos
         if col0 in ["CARRO", "MODELO", "ESTOQUE MANU AUTOMÓVEIS"]:
             continue
 
@@ -105,19 +117,28 @@ def main():
             pulados += 1
             continue
 
-        # Se não tem placa, cria uma temporária para não perder o carro
+        # Se não tiver placa, cria uma temporária
         if not placa:
             placa = f"SEM-PLACA-{idx}"
 
+        # Verifica se já existe
         cursor.execute("SELECT id FROM estoque_carros WHERE placa = %s", (placa,))
         existing = cursor.fetchone()
 
         if existing:
             cursor.execute("""
                 UPDATE estoque_carros SET
-                    marca = %s, carro = %s, modelo = %s, preco = %s,
-                    ano = %s, patio = %s, cor = %s, combustivel = %s,
-                    km = %s, leilao = %s, updated_at = NOW()
+                    marca = %s,
+                    carro = %s,
+                    modelo = %s,
+                    preco = %s,
+                    ano = %s,
+                    patio = %s,
+                    cor = %s,
+                    combustivel = %s,
+                    km = %s,
+                    leilao = %s,
+                    updated_at = NOW()
                 WHERE placa = %s
             """, (marca_atual, carro, modelo, preco, ano, patio, cor, combustivel, km, leilao, placa))
             atualizados += 1
