@@ -2029,6 +2029,16 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                 ),
             )
 
+        novo_nome_completo = None
+        if gerou_ficha:
+            novo_nome_completo = st.text_input(
+                "Nome completo",
+                value=str(
+                    lead_data.get("nome_completo")
+                    or lead_data.get("nome_lead")
+                    or ""
+                ),
+            )
         novo_cpf = st.text_input(
             "CPF",
             value=str(lead_data.get("cpf") or ""),
@@ -2042,7 +2052,7 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
         nova_placa_carro = None
         novo_valor_carro = None
         if gerou_ficha:
-            st.markdown("### Veículo da ficha")
+            st.markdown("### 🚗 Veículo da ficha")
             ficha_col_1, ficha_col_2 = st.columns(2)
             with ficha_col_1:
                 novo_carro_selecionado = st.text_input(
@@ -2129,6 +2139,10 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                     ELSE NULL
                 END,
                 cpf = :cpf,
+                nome_completo = COALESCE(
+                    :nome_completo,
+                    nome_completo
+                ),
                 data_nascimento = :data_nascimento,
                 produto_interesse = :carro_selecionado,
                 carro_selecionado = :carro_selecionado,
@@ -2166,6 +2180,11 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                     "venda_concluida": venda_concluida,
                     "tem_ficha": bool(tem_ficha),
                     "cpf": vazio_para_none(novo_cpf),
+                    "nome_completo": (
+                        vazio_para_none(novo_nome_completo)
+                        if gerou_ficha
+                        else None
+                    ),
                     "data_nascimento": vazio_para_none(
                         nova_data_nascimento
                     ),
@@ -2451,11 +2470,11 @@ def mostrar_formulario_novo_lead(
             col_ficha_1, col_ficha_2 = st.columns(2)
 
             with col_ficha_1:
-                cpf = st.text_input("CPF")
                 nome_completo = st.text_input(
                     "Nome completo",
                     value=nome,
                 )
+                cpf = st.text_input("CPF")
                 data_nascimento = st.text_input("Data de nascimento")
                 carro_selecionado = st.text_input(
                     "Carro selecionado*",
@@ -3038,7 +3057,11 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
         return
 
     st.title("Equipe de Vendedores")
-    st.caption("Visão geral do desempenho da equipe.")
+    st.caption(
+        "Ranking calculado automaticamente: "
+        "lead = 100 pontos, ficha gerada = 50, "
+        "aprovação = 150 e venda = 300."
+    )
 
     query = text(
         """
@@ -3054,13 +3077,29 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
             ) AS total_aprovados,
             COUNT(l.id) FILTER (
                 WHERE l.venda_concluida = TRUE OR l.vendeu = TRUE
-            ) AS total_vendas
+            ) AS total_vendas,
+            SUM(
+                CASE WHEN l.id IS NOT NULL THEN 100 ELSE 0 END
+                + CASE
+                    WHEN COALESCE(l.gerou_ficha, FALSE) = TRUE
+                    THEN 50 ELSE 0
+                  END
+                + CASE
+                    WHEN COALESCE(l.aprovou_credito, FALSE) = TRUE
+                    THEN 150 ELSE 0
+                  END
+                + CASE
+                    WHEN COALESCE(l.venda_concluida, FALSE) = TRUE
+                      OR COALESCE(l.vendeu, FALSE) = TRUE
+                    THEN 300 ELSE 0
+                  END
+            ) AS pontos
         FROM public.vendedores v
         LEFT JOIN public.leads l
             ON l.vendedor_id = v.id
         WHERE COALESCE(v.ativo, TRUE) = TRUE
         GROUP BY v.id, v.nome
-        ORDER BY total_vendas DESC, total_aprovados DESC, v.nome
+        ORDER BY pontos DESC, total_vendas DESC, total_aprovados DESC, v.nome
         """
     )
 
@@ -3075,14 +3114,18 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
         st.info("Nenhum vendedor encontrado.")
         return
 
-    for _, row in df.iterrows():
+    for posicao, (_, row) in enumerate(
+        df.iterrows(),
+        start=1,
+    ):
         with st.container(border=True):
-            st.subheader(row["nome"])
-            col1, col2, col3, col4 = st.columns(4)
+            st.subheader(f"#{posicao} — {row['nome']}")
+            col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("Leads", int(row["total_leads"]))
             col2.metric("Fichas", int(row["total_fichas"]))
             col3.metric("Aprovados", int(row["total_aprovados"]))
             col4.metric("Vendas", int(row["total_vendas"]))
+            col5.metric("Pontos", int(row["pontos"] or 0))
 
 
 def pagina_fichas(usuario: Dict[str, Any]) -> None:
