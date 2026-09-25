@@ -503,70 +503,47 @@ def buscar_leads(
     data_fim: Optional[date] = None,
 ) -> pd.DataFrame:
     escopo, parametros = escopo_leads(usuario)
+    filtros = [escopo]
 
-    filtros = [
-        escopo,
-        """
-        (
-            :categoria = 'todos'
-            OR (:categoria = 'fichas' AND l.gerou_ficha = TRUE)
-            OR (
-                :categoria = 'aprovados'
-                AND l.gerou_ficha = TRUE
-                AND l.aprovou_credito = TRUE
-            )
-            OR (
-                :categoria = 'responderam'
-                AND l.respondeu = TRUE
-            )
-            OR (:categoria = 'vendidos' AND (
-                l.venda_concluida = TRUE OR l.vendeu = TRUE
-            ))
+    filtros_por_categoria = {
+        "fichas": "l.gerou_ficha = TRUE",
+        "aprovados": (
+            "l.gerou_ficha = TRUE "
+            "AND l.aprovou_credito = TRUE"
+        ),
+        "responderam": "l.respondeu = TRUE",
+        "vendidos": (
+            "l.venda_concluida = TRUE OR l.vendeu = TRUE"
+        ),
+    }
+    if categoria in filtros_por_categoria:
+        filtros.append(
+            f"({filtros_por_categoria[categoria]})"
         )
-        """,
-        """
-        (
-            :busca = ''
-            OR l.nome_lead ILIKE :termo
-            OR l.cpf ILIKE :termo
-            OR l.telefone ILIKE :termo
-            OR l.observacao ILIKE :termo
-        )
-        """,
-        """
-        (
-            :vendedor_filtro IS NULL
-            OR l.vendedor_id = :vendedor_filtro
-        )
-        """,
-        """
-        (
-            :data_inicio IS NULL
-            OR l.data_lead >= :data_inicio
-        )
-        """,
-        """
-        (
-            :data_fim IS NULL
-            OR l.data_lead < :data_fim
-        )
-        """,
-    ]
 
-    parametros.update(
-        {
-            "categoria": categoria,
-            "busca": termo_busca.strip(),
-            "termo": f"%{termo_busca.strip()}%",
-            "vendedor_filtro": vendedor_filtro,
-            "data_inicio": data_inicio,
-            "data_fim": (
-                data_fim + timedelta(days=1)
-                if data_fim is not None
-                else None
-            ),
-        }
-    )
+    termo_limpo = termo_busca.strip()
+    if termo_limpo:
+        filtros.append(
+            """
+            (
+                l.nome_lead ILIKE :termo
+                OR l.cpf ILIKE :termo
+                OR l.telefone ILIKE :termo
+                OR l.observacao ILIKE :termo
+            )
+            """
+        )
+        parametros["termo"] = f"%{termo_limpo}%"
+
+    if vendedor_filtro is not None:
+        filtros.append("l.vendedor_id = :vendedor_filtro")
+        parametros["vendedor_filtro"] = vendedor_filtro
+    if data_inicio is not None:
+        filtros.append("l.data_lead >= :data_inicio")
+        parametros["data_inicio"] = data_inicio
+    if data_fim is not None:
+        filtros.append("l.data_lead < :data_fim")
+        parametros["data_fim"] = data_fim + timedelta(days=1)
 
     query = text(
         f"""
@@ -1069,6 +1046,168 @@ def criar_ficha_credito(
     )
 
     return int(ficha_id)
+
+
+def salvar_anexos_ficha(
+    conn: Any,
+    ficha_id: int,
+    usuario_id: int,
+    arquivos: Any,
+) -> None:
+    """Persiste os arquivos enviados junto com uma ficha."""
+    if not arquivos:
+        return
+
+    if not isinstance(arquivos, (list, tuple)):
+        arquivos = [arquivos]
+
+    for arquivo in arquivos:
+        if arquivo is None:
+            continue
+        conteudo = arquivo.getvalue()
+        if not conteudo:
+            continue
+        conn.execute(
+            text(
+                """
+                INSERT INTO public.ficha_anexos (
+                    ficha_id,
+                    nome_arquivo,
+                    mime_type,
+                    arquivo_bytes,
+                    enviado_por_id
+                )
+                VALUES (
+                    :ficha_id,
+                    :nome_arquivo,
+                    :mime_type,
+                    :arquivo_bytes,
+                    :usuario_id
+                )
+                """
+            ),
+            {
+                "ficha_id": ficha_id,
+                "nome_arquivo": (
+                    getattr(arquivo, "name", None)
+                    or "documento"
+                ),
+                "mime_type": (
+                    getattr(arquivo, "type", None)
+                    or "application/octet-stream"
+                ),
+                "arquivo_bytes": conteudo,
+                "usuario_id": usuario_id,
+            },
+        )
+
+
+def obter_anexos_ficha(ficha_id: int) -> pd.DataFrame:
+    query = text(
+        """
+        SELECT
+            a.id,
+            a.nome_arquivo,
+            a.mime_type,
+            a.arquivo_bytes,
+            a.categoria,
+            a.created_at,
+            u.nome AS enviado_por
+        FROM public.ficha_anexos a
+        LEFT JOIN public.usuarios u
+            ON u.id = a.enviado_por_id
+        WHERE a.ficha_id = :ficha_id
+        ORDER BY a.created_at DESC, a.id DESC
+        """
+    )
+    with engine.connect() as conn:
+        return pd.read_sql_query(
+            query,
+            conn,
+            params={"ficha_id": ficha_id},
+        )
+
+
+def mostrar_anexos_ficha(
+    ficha_id: int,
+    usuario: Dict[str, Any],
+    chave: str,
+) -> None:
+    """Mostra e, quando permitido, recebe documentos da ficha."""
+    try:
+        anexos = obter_anexos_ficha(ficha_id)
+    except Exception as erro:
+        st.warning(
+            "Execute schema_fichas_credito.sql para ativar os anexos. "
+            f"Detalhe: {erro}"
+        )
+        return
+
+    with st.expander(
+        f"📎 Documentos e anexos ({len(anexos)})",
+        expanded=False,
+    ):
+        if anexos.empty:
+            st.caption("Nenhum anexo enviado.")
+        else:
+            for _, anexo in anexos.iterrows():
+                conteudo = anexo.get("arquivo_bytes")
+                if conteudo is None or (
+                    isinstance(conteudo, float) and pd.isna(conteudo)
+                ):
+                    continue
+                nome = anexo.get("nome_arquivo") or "documento"
+                mime = (
+                    anexo.get("mime_type")
+                    or "application/octet-stream"
+                )
+                col_anexo_1, col_anexo_2 = st.columns([3, 1])
+                col_anexo_1.write(
+                    f"**{nome}** · "
+                    f"{formatar_data_br(anexo.get('created_at'), True)}"
+                )
+                col_anexo_2.download_button(
+                    "Baixar",
+                    data=conteudo,
+                    file_name=nome,
+                    mime=mime,
+                    key=f"baixar_anexo_{chave}_{anexo['id']}",
+                )
+
+        if usuario_tem("view_documents"):
+            novos_anexos = st.file_uploader(
+                "Adicionar documentos",
+                type=[
+                    "pdf",
+                    "png",
+                    "jpg",
+                    "jpeg",
+                    "webp",
+                    "doc",
+                    "docx",
+                    "xls",
+                    "xlsx",
+                ],
+                accept_multiple_files=True,
+                key=f"upload_anexo_{chave}",
+            )
+            if st.button(
+                "Salvar anexos",
+                key=f"salvar_anexo_{chave}",
+                disabled=not novos_anexos,
+            ):
+                try:
+                    with engine.begin() as conn:
+                        salvar_anexos_ficha(
+                            conn,
+                            ficha_id,
+                            usuario["id"],
+                            novos_anexos,
+                        )
+                    st.success("Anexos adicionados à ficha.")
+                    st.rerun()
+                except Exception as erro:
+                    st.error(f"Erro ao salvar anexos: {erro}")
 
 
 def obter_fichas_credito(
@@ -2215,6 +2354,7 @@ def mostrar_formulario_novo_lead(
         habilitado = None
         carro_interesse = None
         valor_entrada = None
+        anexos_ficha = []
 
         if gerou_ficha:
             st.markdown("### 📝 Dados da ficha")
@@ -2240,6 +2380,25 @@ def mostrar_formulario_novo_lead(
                     min_value=0.0,
                     step=100.0,
                 )
+            anexos_ficha = st.file_uploader(
+                "Documentos da ficha",
+                type=[
+                    "pdf",
+                    "png",
+                    "jpg",
+                    "jpeg",
+                    "webp",
+                    "doc",
+                    "docx",
+                    "xls",
+                    "xlsx",
+                ],
+                accept_multiple_files=True,
+                help=(
+                    "Você poderá adicionar outros documentos depois. "
+                    "Eles ficarão disponíveis para o documentista e a Elfen AI."
+                ),
+            )
 
         observacao = st.text_area("Observações gerais")
 
@@ -2341,12 +2500,18 @@ def mostrar_formulario_novo_lead(
             ).scalar_one()
 
             if gerou_ficha:
-                criar_ficha_credito(
+                ficha_id = criar_ficha_credito(
                     conn=conn,
                     lead_id=int(lead_id),
                     vendedor_id=vendedor_id,
                     valor_entrada=float(valor_entrada or 0),
                     usuario_id=usuario["id"],
+                )
+                salvar_anexos_ficha(
+                    conn,
+                    ficha_id,
+                    usuario["id"],
+                    anexos_ficha,
                 )
 
         st.success("Lead inserido com sucesso.")
@@ -2513,6 +2678,11 @@ def pagina_documentista(usuario: Dict[str, Any]) -> None:
             c6.write(
                 f"**Venda:** "
                 f"{formatar_data_br(ficha.get('data_compra'))}"
+            )
+            mostrar_anexos_ficha(
+                int(ficha["ficha_id"]),
+                usuario,
+                f"documentos_{ficha['ficha_id']}",
             )
 
             with st.form(f"form_transferencia_{ficha['ficha_id']}"):
@@ -3027,7 +3197,7 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                 )
 
             pode_editar_dados = (
-                usuario_tem("edit_bank_results")
+                usuario["tipo"] in {"gerente", "elfen_ai"}
                 or (
                     usuario_tem("edit_own_credit_data")
                     and ficha.get("vendedor_id")
@@ -3091,6 +3261,12 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                             nova_entrada_ficha,
                         )
 
+            mostrar_anexos_ficha(
+                int(ficha["id"]),
+                usuario,
+                f"ficha_{ficha['id']}",
+            )
+
             st.markdown("### Resultado nos bancos")
             try:
                 bancos_todos = obter_analises_banco(int(ficha["id"]))
@@ -3120,10 +3296,11 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                         "negado": "❌",
                     }.get(status_banco, "•")
 
-                    with st.container(border=True):
-                        st.markdown(
-                            f"#### {label_banco} {banco['banco']}"
-                        )
+                    with st.expander(
+                        f"{label_banco} {banco['banco']} · "
+                        f"{status_banco.capitalize()}",
+                        expanded=False,
+                    ):
 
                         if usuario_tem("edit_bank_results"):
                             status_lista = [
@@ -3691,34 +3868,75 @@ def pagina_chat(usuario: Dict[str, Any]) -> None:
                         )
                         st.rerun()
 
-    novo_texto = st.chat_input("Digite sua mensagem...")
-    arquivo = st.file_uploader(
-        "Anexar arquivo ou imagem",
-        type=["png", "jpg", "jpeg", "webp", "pdf", "doc", "docx"],
-        key="chat_arquivo_geral",
-    )
-    audio_input = getattr(st, "audio_input", None)
-    audio = (
-        audio_input("Gravar áudio")
-        if callable(audio_input)
-        else None
-    )
-    enviar_anexo = st.button(
-        "Enviar anexo/áudio",
-        disabled=arquivo is None and audio is None,
-    )
-
-    if novo_texto and novo_texto.strip():
-        salvar_mensagem_chat_geral(usuario_id, novo_texto)
-        st.rerun()
-    elif enviar_anexo:
-        salvar_mensagem_chat_geral(
-            usuario_id,
-            "",
-            arquivo=arquivo,
-            audio=audio,
+    entrada_chat = None
+    chat_com_anexos = True
+    try:
+        # Nas versões recentes, o próprio st.chat_input exibe o botão
+        # de anexos ao lado do campo e mantém o envio em uma única ação.
+        entrada_chat = st.chat_input(
+            "Digite sua mensagem ou anexe um documento...",
+            accept_file="multiple",
+            accept_audio=True,
+            file_type=[
+                "png",
+                "jpg",
+                "jpeg",
+                "webp",
+                "pdf",
+                "doc",
+                "docx",
+                "xls",
+                "xlsx",
+            ],
         )
+    except TypeError:
+        # Compatibilidade com uma versão antiga do Streamlit.
+        chat_com_anexos = False
+
+    if chat_com_anexos and entrada_chat:
+        texto_chat = getattr(entrada_chat, "text", None)
+        if texto_chat is None and isinstance(entrada_chat, str):
+            texto_chat = entrada_chat
+        arquivos_chat = list(
+            getattr(entrada_chat, "files", None) or []
+        )
+
+        if arquivos_chat:
+            for indice, arquivo_chat in enumerate(arquivos_chat):
+                salvar_mensagem_chat_geral(
+                    usuario_id,
+                    texto_chat if indice == 0 else "",
+                    arquivo=arquivo_chat,
+                )
+        elif texto_chat and texto_chat.strip():
+            salvar_mensagem_chat_geral(usuario_id, texto_chat)
         st.rerun()
+
+    if not chat_com_anexos:
+        arquivo = st.file_uploader(
+            "Anexar arquivo ou imagem",
+            type=[
+                "png",
+                "jpg",
+                "jpeg",
+                "webp",
+                "pdf",
+                "doc",
+                "docx",
+            ],
+            key="chat_arquivo_geral",
+        )
+        enviar_anexo = st.button(
+            "Enviar anexo",
+            disabled=arquivo is None,
+        )
+        if enviar_anexo:
+            salvar_mensagem_chat_geral(
+                usuario_id,
+                "",
+                arquivo=arquivo,
+            )
+            st.rerun()
 
 
 def pagina_tarefas(usuario: Dict[str, Any]) -> None:
