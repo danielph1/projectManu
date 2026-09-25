@@ -457,6 +457,7 @@ def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
             "total_fichas": int(result["total_fichas"] or 0),
             "total_aprovados": int(result["total_aprovados"] or 0),
             "total_vendidos": int(result["total_vendidos"] or 0),
+            "total_respondido": int(result["total_respondido"] or 0),
         }
     except Exception as erro:
         st.error(f"Erro nas métricas: {erro}")
@@ -465,6 +466,7 @@ def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
             "total_fichas": 0,
             "total_aprovados": 0,
             "total_vendidos": 0,
+            "total_respondido": 0,
         }
 
 
