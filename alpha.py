@@ -2624,10 +2624,6 @@ def pagina_documentista(usuario: Dict[str, Any]) -> None:
         return
 
     st.title("Processos de Transferência")
-    st.caption(
-        "Somente clientes vendidos. O documentista atualiza o andamento "
-        "da transferência; o gerente também pode revisar e alterar."
-    )
 
     try:
         fichas = obter_fichas_documentais()
@@ -3805,10 +3801,6 @@ def pagina_chat(usuario: Dict[str, Any]) -> None:
 
     usuario_id = usuario["id"]
     st.title("Central de Chat")
-    st.caption(
-        "Chat geral para todos os usuários. A estrutura já suporta "
-        "arquivos, imagens, áudios e reações."
-    )
 
     try:
         marcar_chat_geral_como_lido(usuario_id)
@@ -3953,10 +3945,6 @@ def pagina_tarefas(usuario: Dict[str, Any]) -> None:
         return
 
     st.title("Tarefas")
-    st.caption(
-        "O gerente acompanha todas as tarefas. Cada colaborador "
-        "visualiza apenas as tarefas destinadas a ele."
-    )
 
     tarefas_nao_lidas = contar_tarefas_nao_visualizadas(usuario["id"])
     if tarefas_nao_lidas:
@@ -4248,10 +4236,6 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
         return
 
     st.title("Metas")
-    st.caption(
-        "As metas podem ser gerais ou destinadas a um usuário específico. "
-        "Somente o gerente pode administrar esta área."
-    )
 
     usuarios = obter_usuarios_ativos()
 
