@@ -56,6 +56,7 @@ ROLE_ALIASES = {
 PERMISSIONS: Dict[str, Set[str]] = {
     "vendedor": {
         "view_leads",
+        "view_stock",
         "create_lead",
         "edit_own_lead",
         "delete_own_lead",
@@ -75,6 +76,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
     },
     "elfen_ai": {
         "view_leads",
+        "view_stock",
         "use_elfen_ai",
         "use_chat",
         "view_tasks",
@@ -85,6 +87,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
     },
     "financeiro": {
         "view_leads",
+        "view_stock",
         "use_chat",
         "view_financial",
         "view_tasks",
@@ -96,6 +99,8 @@ PERMISSIONS: Dict[str, Set[str]] = {
     },
     "documentista": {
         "view_leads",
+        "view_stock",
+        "manage_stock",
         "use_chat",
         "view_documents",
         "view_tasks",
@@ -2310,6 +2315,16 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
 
         pagina = st.session_state["pagina_atual"]
 
+        if usuario_tem("view_stock"):
+            if st.button(
+                "🚗 Estoque",
+                use_container_width=True,
+                type="primary" if pagina == "estoque" else "secondary",
+            ):
+                st.session_state["pagina_atual"] = "estoque"
+                st.session_state["abrir_formulario"] = False
+                st.rerun()
+
         if usuario_tem("view_leads") and usuario["tipo"] != "documentista":
             if st.button(
                 "Painel de Leads",
@@ -2785,6 +2800,665 @@ def mostrar_card_lead(
                 "Atualizado em: "
                 f"{formatar_data_br(atualizado, incluir_hora=True)}"
             )
+
+
+def obter_estoque_carros(busca: str = "") -> pd.DataFrame:
+    filtros = ["COALESCE(ativo, TRUE) = TRUE"]
+    parametros: Dict[str, Any] = {}
+
+    busca_limpa = busca.strip()
+    if busca_limpa:
+        filtros.append(
+            """
+            (
+                marca ILIKE :busca
+                OR carro ILIKE :busca
+                OR modelo ILIKE :busca
+                OR cor ILIKE :busca
+                OR placa ILIKE :busca
+                OR CAST(ano AS TEXT) ILIKE :busca
+            )
+            """
+        )
+        parametros["busca"] = f"%{busca_limpa}%"
+
+    query = text(
+        f"""
+        SELECT
+            id,
+            marca,
+            carro,
+            modelo,
+            preco,
+            ano,
+            patio,
+            cor,
+            combustivel,
+            placa,
+            km,
+            leilao,
+            status,
+            ativo,
+            created_at
+        FROM public.estoque_carros
+        WHERE {" AND ".join(f"({filtro})" for filtro in filtros)}
+        ORDER BY
+            LOWER(COALESCE(marca, '')),
+            LOWER(COALESCE(carro, '')),
+            LOWER(COALESCE(modelo, '')),
+            id
+        """
+    )
+
+    with engine.connect() as conn:
+        return pd.read_sql_query(query, conn, params=parametros)
+
+
+def salvar_anexos_estoque(
+    conn: Any,
+    carro_id: int,
+    usuario_id: int,
+    arquivos: Any,
+) -> None:
+    if not arquivos:
+        return
+
+    if not isinstance(arquivos, (list, tuple)):
+        arquivos = [arquivos]
+
+    for arquivo in arquivos:
+        if arquivo is None:
+            continue
+        conteudo = arquivo.getvalue()
+        if not conteudo:
+            continue
+        conn.execute(
+            text(
+                """
+                INSERT INTO public.estoque_carros_anexos (
+                    carro_id,
+                    nome_arquivo,
+                    mime_type,
+                    arquivo_bytes,
+                    enviado_por_id
+                )
+                VALUES (
+                    :carro_id,
+                    :nome_arquivo,
+                    :mime_type,
+                    :arquivo_bytes,
+                    :usuario_id
+                )
+                """
+            ),
+            {
+                "carro_id": carro_id,
+                "nome_arquivo": (
+                    getattr(arquivo, "name", None) or "documento"
+                ),
+                "mime_type": (
+                    getattr(arquivo, "type", None)
+                    or "application/octet-stream"
+                ),
+                "arquivo_bytes": conteudo,
+                "usuario_id": usuario_id,
+            },
+        )
+
+
+def obter_anexos_estoque(carro_id: int) -> pd.DataFrame:
+    query = text(
+        """
+        SELECT
+            a.id,
+            a.nome_arquivo,
+            a.mime_type,
+            a.arquivo_bytes,
+            a.created_at,
+            u.nome AS enviado_por
+        FROM public.estoque_carros_anexos a
+        LEFT JOIN public.usuarios u
+            ON u.id = a.enviado_por_id
+        WHERE a.carro_id = :carro_id
+        ORDER BY a.created_at DESC, a.id DESC
+        """
+    )
+    with engine.connect() as conn:
+        return pd.read_sql_query(
+            query,
+            conn,
+            params={"carro_id": carro_id},
+        )
+
+
+def mostrar_anexos_estoque(
+    carro_id: int,
+    usuario: Dict[str, Any],
+    chave: str,
+) -> None:
+    try:
+        anexos = obter_anexos_estoque(carro_id)
+    except Exception as erro:
+        st.warning(
+            "Execute migration_estoque_carros.sql para ativar os anexos. "
+            f"Detalhe: {erro}"
+        )
+        return
+
+    with st.expander(
+        f"📎 Arquivos do carro ({len(anexos)})",
+        expanded=False,
+    ):
+        if anexos.empty:
+            st.caption("Nenhum arquivo anexado.")
+        else:
+            for _, anexo in anexos.iterrows():
+                conteudo = anexo.get("arquivo_bytes")
+                if conteudo is None or (
+                    isinstance(conteudo, float) and pd.isna(conteudo)
+                ):
+                    continue
+                nome = anexo.get("nome_arquivo") or "documento"
+                mime = (
+                    anexo.get("mime_type")
+                    or "application/octet-stream"
+                )
+                col_arquivo_1, col_arquivo_2 = st.columns([3, 1])
+                col_arquivo_1.write(
+                    f"**{nome}** · "
+                    f"{formatar_data_br(anexo.get('created_at'), True)}"
+                )
+                col_arquivo_2.download_button(
+                    "Baixar",
+                    data=conteudo,
+                    file_name=nome,
+                    mime=mime,
+                    key=f"baixar_estoque_{chave}_{anexo['id']}",
+                )
+
+        if usuario_tem("manage_stock"):
+            novos_arquivos = st.file_uploader(
+                "Anexar arquivos",
+                type=[
+                    "pdf",
+                    "png",
+                    "jpg",
+                    "jpeg",
+                    "webp",
+                    "doc",
+                    "docx",
+                    "xls",
+                    "xlsx",
+                ],
+                accept_multiple_files=True,
+                key=f"upload_estoque_{chave}",
+            )
+            if st.button(
+                "Salvar arquivos",
+                key=f"salvar_arquivos_estoque_{chave}",
+                disabled=not novos_arquivos,
+            ):
+                try:
+                    with engine.begin() as conn:
+                        salvar_anexos_estoque(
+                            conn,
+                            carro_id,
+                            usuario["id"],
+                            novos_arquivos,
+                        )
+                    st.success("Arquivos anexados ao carro.")
+                    st.rerun()
+                except Exception as erro:
+                    st.error(f"Erro ao anexar arquivos: {erro}")
+
+
+@st.dialog("Editar carro do estoque")
+def editar_carro_estoque_modal(carro_data: pd.Series) -> None:
+    usuario = st.session_state["usuario_logado"]
+    if not usuario_tem("manage_stock"):
+        st.error("Somente gerente e documentista podem editar carros.")
+        return
+
+    with st.form(f"form_editar_estoque_{carro_data['id']}"):
+        col1, col2, col3 = st.columns(3)
+        marca = col1.text_input(
+            "Marca*",
+            value=str(carro_data.get("marca") or ""),
+        )
+        carro = col2.text_input(
+            "Carro*",
+            value=str(carro_data.get("carro") or ""),
+        )
+        modelo = col3.text_input(
+            "Modelo",
+            value=str(carro_data.get("modelo") or ""),
+        )
+
+        col4, col5, col6 = st.columns(3)
+        preco = col4.number_input(
+            "Preço",
+            min_value=0.0,
+            value=numero_seguro(carro_data.get("preco")),
+            step=1000.0,
+        )
+        ano = col5.text_input(
+            "Ano",
+            value=str(carro_data.get("ano") or ""),
+        )
+        patio = col6.text_input(
+            "Pátio",
+            value=str(carro_data.get("patio") or ""),
+        )
+
+        col7, col8, col9 = st.columns(3)
+        cor = col7.text_input(
+            "Cor",
+            value=str(carro_data.get("cor") or ""),
+        )
+        combustivel = col8.text_input(
+            "Combustível",
+            value=str(carro_data.get("combustivel") or ""),
+        )
+        placa = col9.text_input(
+            "Placa",
+            value=str(carro_data.get("placa") or ""),
+        )
+
+        col10, col11, col12 = st.columns(3)
+        km = col10.number_input(
+            "Km",
+            min_value=0,
+            value=inteiro_seguro(carro_data.get("km"), 0),
+            step=1000,
+        )
+        status_atual = str(carro_data.get("status") or "disponivel")
+        status_opcoes = sorted(
+            set(
+                [
+                    "disponivel",
+                    "reservado",
+                    "vendido",
+                    "manutencao",
+                    status_atual,
+                ]
+            )
+        )
+        status = col11.selectbox(
+            "Status",
+            status_opcoes,
+            index=status_opcoes.index(status_atual),
+        )
+        leilao = col12.checkbox(
+            "Leilão",
+            value=bool(carro_data.get("leilao")),
+        )
+
+        salvar = st.form_submit_button(
+            "Salvar carro",
+            use_container_width=True,
+            type="primary",
+        )
+
+    if not salvar:
+        return
+    if not marca.strip() or not carro.strip():
+        st.warning("Marca e carro são obrigatórios.")
+        return
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    UPDATE public.estoque_carros
+                    SET
+                        marca = :marca,
+                        carro = :carro,
+                        modelo = :modelo,
+                        preco = :preco,
+                        ano = :ano,
+                        patio = :patio,
+                        cor = :cor,
+                        combustivel = :combustivel,
+                        placa = :placa,
+                        km = :km,
+                        leilao = :leilao,
+                        status = :status
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    "marca": marca.strip(),
+                    "carro": carro.strip(),
+                    "modelo": modelo.strip() or None,
+                    "preco": preco,
+                    "ano": ano.strip() or None,
+                    "patio": patio.strip() or None,
+                    "cor": cor.strip() or None,
+                    "combustivel": combustivel.strip() or None,
+                    "placa": placa.strip().replace("-", "").upper() or None,
+                    "km": km,
+                    "leilao": leilao,
+                    "status": status,
+                    "id": int(carro_data["id"]),
+                },
+            )
+        st.success("Carro atualizado.")
+        st.rerun()
+    except Exception as erro:
+        st.error(f"Erro ao editar carro: {erro}")
+
+
+@st.dialog("Excluir carro do estoque")
+def excluir_carro_estoque_modal(carro_data: pd.Series) -> None:
+    usuario = st.session_state["usuario_logado"]
+    if not usuario_tem("manage_stock"):
+        st.error("Somente gerente e documentista podem excluir carros.")
+        return
+
+    nome = " ".join(
+        str(valor).strip()
+        for valor in [
+            carro_data.get("marca"),
+            carro_data.get("carro"),
+            carro_data.get("modelo"),
+        ]
+        if valor and str(valor).strip()
+    )
+    st.warning(
+        f"O carro **{nome}** será retirado do estoque. "
+        "Os anexos e o histórico serão preservados."
+    )
+    confirmar = st.button(
+        "Sim, excluir carro",
+        type="primary",
+        use_container_width=True,
+    )
+    cancelar = st.button("Cancelar", use_container_width=True)
+
+    if cancelar:
+        st.rerun()
+    if confirmar:
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE public.estoque_carros
+                        SET ativo = FALSE
+                        WHERE id = :id
+                        """
+                    ),
+                    {"id": int(carro_data["id"])},
+                )
+            st.success("Carro retirado do estoque.")
+            st.rerun()
+        except Exception as erro:
+            st.error(f"Erro ao excluir carro: {erro}")
+
+
+def mostrar_card_estoque(
+    carro_data: pd.Series,
+    usuario: Dict[str, Any],
+    chave: str,
+) -> None:
+    with st.container(border=True):
+        titulo = " ".join(
+            str(valor).strip()
+            for valor in [
+                carro_data.get("carro"),
+                carro_data.get("modelo"),
+            ]
+            if valor and str(valor).strip()
+        ) or "Carro sem descrição"
+        st.subheader(titulo)
+
+        col1, col2, col3 = st.columns(3)
+        col1.write(f"**Marca:** {carro_data.get('marca') or '-'}")
+        col2.write(f"**Ano:** {carro_data.get('ano') or '-'}")
+        col3.write(
+            f"**Preço:** R$ {numero_seguro(carro_data.get('preco')):,.2f}"
+        )
+        col4, col5, col6 = st.columns(3)
+        col4.write(f"**Placa:** {carro_data.get('placa') or '-'}")
+        col5.write(f"**Cor:** {carro_data.get('cor') or '-'}")
+        col6.write(f"**Combustível:** {carro_data.get('combustivel') or '-'}")
+        col7, col8, col9 = st.columns(3)
+        col7.write(
+            f"**Km:** {inteiro_seguro(carro_data.get('km'), 0):,}"
+        )
+        col8.write(f"**Pátio:** {carro_data.get('patio') or '-'}")
+        col9.write(f"**Status:** {carro_data.get('status') or '-'}")
+
+        if carro_data.get("leilao"):
+            st.info("Este veículo é de leilão.")
+
+        mostrar_anexos_estoque(
+            int(carro_data["id"]),
+            usuario,
+            f"{chave}_carro_{carro_data['id']}",
+        )
+
+        if usuario_tem("manage_stock"):
+            col_editar, col_excluir = st.columns(2)
+            with col_editar:
+                if st.button(
+                    "Editar carro",
+                    key=f"editar_estoque_{chave}_{carro_data['id']}",
+                    use_container_width=True,
+                ):
+                    editar_carro_estoque_modal(carro_data)
+            with col_excluir:
+                if st.button(
+                    "Excluir carro",
+                    key=f"excluir_estoque_{chave}_{carro_data['id']}",
+                    use_container_width=True,
+                ):
+                    excluir_carro_estoque_modal(carro_data)
+
+
+def mostrar_lista_estoque(
+    estoque: pd.DataFrame,
+    usuario: Dict[str, Any],
+    chave: str,
+) -> None:
+    if estoque.empty:
+        st.info("Nenhum carro encontrado.")
+        return
+
+    grupos: Dict[str, list] = {}
+    for _, carro in estoque.iterrows():
+        marca = str(carro.get("marca") or "Sem marca").strip()
+        grupos.setdefault(marca, []).append(carro)
+
+    for indice, marca in enumerate(
+        sorted(grupos, key=lambda valor: valor.casefold())
+    ):
+        carros = grupos[marca]
+        with st.expander(
+            f"🚘 {marca} ({len(carros)})",
+            expanded=False,
+        ):
+            for carro in carros:
+                mostrar_card_estoque(
+                    carro,
+                    usuario,
+                    chave,
+                )
+
+
+def pagina_estoque(usuario: Dict[str, Any]) -> None:
+    if not usuario_tem("view_stock"):
+        st.error("Você não tem permissão para ver o estoque.")
+        return
+
+    st.title("Estoque de carros")
+    st.caption(
+        "Todos podem consultar. Apenas gerente e documentista "
+        "podem cadastrar, editar, excluir e anexar arquivos."
+    )
+
+    if usuario_tem("manage_stock"):
+        with st.expander("➕ Cadastrar carro no estoque"):
+            with st.form("form_novo_carro_estoque", clear_on_submit=True):
+                col1, col2, col3 = st.columns(3)
+                marca = col1.text_input("Marca*")
+                carro = col2.text_input("Carro*")
+                modelo = col3.text_input("Modelo")
+
+                col4, col5, col6 = st.columns(3)
+                preco = col4.number_input(
+                    "Preço",
+                    min_value=0.0,
+                    step=1000.0,
+                )
+                ano = col5.text_input("Ano")
+                patio = col6.text_input("Pátio")
+
+                col7, col8, col9 = st.columns(3)
+                cor = col7.text_input("Cor")
+                combustivel = col8.text_input("Combustível")
+                placa = col9.text_input("Placa")
+
+                col10, col11, col12 = st.columns(3)
+                km = col10.number_input("Km", min_value=0, step=1000)
+                status = col11.selectbox(
+                    "Status",
+                    [
+                        "disponivel",
+                        "reservado",
+                        "vendido",
+                        "manutencao",
+                    ],
+                )
+                leilao = col12.checkbox("Leilão")
+                anexos = st.file_uploader(
+                    "Arquivos do carro",
+                    type=[
+                        "pdf",
+                        "png",
+                        "jpg",
+                        "jpeg",
+                        "webp",
+                        "doc",
+                        "docx",
+                        "xls",
+                        "xlsx",
+                    ],
+                    accept_multiple_files=True,
+                )
+                salvar = st.form_submit_button(
+                    "Cadastrar carro",
+                    use_container_width=True,
+                    type="primary",
+                )
+
+            if salvar:
+                if not marca.strip() or not carro.strip():
+                    st.warning("Marca e carro são obrigatórios.")
+                else:
+                    try:
+                        placa_normalizada = (
+                            placa.strip().replace("-", "").upper()
+                            or None
+                        )
+                        with engine.begin() as conn:
+                            carro_id = conn.execute(
+                                text(
+                                    """
+                                    INSERT INTO public.estoque_carros (
+                                        marca,
+                                        carro,
+                                        modelo,
+                                        preco,
+                                        ano,
+                                        patio,
+                                        cor,
+                                        combustivel,
+                                        placa,
+                                        km,
+                                        leilao,
+                                        status,
+                                        ativo
+                                    )
+                                    VALUES (
+                                        :marca,
+                                        :carro,
+                                        :modelo,
+                                        :preco,
+                                        :ano,
+                                        :patio,
+                                        :cor,
+                                        :combustivel,
+                                        :placa,
+                                        :km,
+                                        :leilao,
+                                        :status,
+                                        TRUE
+                                    )
+                                    RETURNING id
+                                    """
+                                ),
+                                {
+                                    "marca": marca.strip(),
+                                    "carro": carro.strip(),
+                                    "modelo": modelo.strip() or None,
+                                    "preco": preco,
+                                    "ano": ano.strip() or None,
+                                    "patio": patio.strip() or None,
+                                    "cor": cor.strip() or None,
+                                    "combustivel": (
+                                        combustivel.strip() or None
+                                    ),
+                                    "placa": placa_normalizada,
+                                    "km": km,
+                                    "leilao": leilao,
+                                    "status": status,
+                                },
+                            ).scalar_one()
+                            salvar_anexos_estoque(
+                                conn,
+                                int(carro_id),
+                                usuario["id"],
+                                anexos,
+                            )
+                        st.success("Carro cadastrado no estoque.")
+                        st.rerun()
+                    except Exception as erro:
+                        st.error(f"Erro ao cadastrar carro: {erro}")
+
+    aba_estoque, aba_pesquisa = st.tabs(
+        ["Estoque por marca", "Pesquisar"]
+    )
+
+    with aba_estoque:
+        try:
+            mostrar_lista_estoque(
+                obter_estoque_carros(),
+                usuario,
+                "estoque",
+            )
+        except Exception as erro:
+            st.error(
+                "Não foi possível carregar o estoque. "
+                "Confira se a tabela public.estoque_carros existe. "
+                f"Detalhe: {erro}"
+            )
+
+    with aba_pesquisa:
+        busca = st.text_input(
+            "Pesquisar no estoque",
+            placeholder="Placa, cor, modelo, marca ou ano",
+            key="busca_estoque",
+        )
+        try:
+            mostrar_lista_estoque(
+                obter_estoque_carros(busca),
+                usuario,
+                "pesquisa_estoque",
+            )
+        except Exception as erro:
+            st.error(f"Erro ao pesquisar estoque: {erro}")
 
 
 # ============================================================
@@ -4737,6 +5411,9 @@ mostrar_sidebar(usuario_atual)
 
 paginas_permitidas = {"leads"}
 
+if usuario_tem("view_stock"):
+    paginas_permitidas.add("estoque")
+
 if usuario_atual["tipo"] == "documentista":
     paginas_permitidas.add("documentos")
 
@@ -4765,7 +5442,9 @@ if st.session_state["pagina_atual"] not in paginas_permitidas:
 
 pagina_atual = st.session_state["pagina_atual"]
 
-if pagina_atual == "leads":
+if pagina_atual == "estoque":
+    pagina_estoque(usuario_atual)
+elif pagina_atual == "leads":
     if usuario_atual["tipo"] == "documentista":
         pagina_documentista(usuario_atual)
     else:
