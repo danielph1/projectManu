@@ -437,7 +437,12 @@ def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
                 WHERE
                     COALESCE(l.venda_concluida, FALSE) = TRUE
                     OR COALESCE(l.vendeu, FALSE) = TRUE
-            ) AS total_vendidos
+            ) AS total_vendidos,
+            COUNT(l.id) FILTER (
+                WHERE
+                    COALESCE(l.total_respondeu, FALSE) = TRUE
+                    OR COALESCE(l.respondeu, FALSE) = TRUE
+            ) AS total_respondido
         FROM public.leads l
         WHERE {condicao}
         """
@@ -480,7 +485,7 @@ def buscar_leads(
             OR (:categoria = 'vendidos' AND (
                 l.venda_concluida = TRUE OR l.vendeu = TRUE
             )
-            OR (:categoria = 'respondeu' AND l.respondeu = TRUE)
+            OR (:categoria = 'respondeu' AND l.total_respondeu = TRUE)
             )
         )
         """,
@@ -1636,6 +1641,7 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                 telefone = :telefone,
                 vendedor_id = :vendedor_id,
                 gerou_ficha = :gerou_ficha,
+                respondeu = :respondeu,
                 venda_concluida = :venda_concluida,
                 vendeu = :venda_concluida,
                 cpf = :cpf,
@@ -1654,6 +1660,7 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                     "telefone": vazio_para_none(novo_tel),
                     "vendedor_id": novo_vendedor_id,
                     "gerou_ficha": gerou_ficha,
+                    "respondeu": respondeu,
                     "venda_concluida": venda_concluida,
                     "cpf": vazio_para_none(novo_cpf),
                     "data_nascimento": vazio_para_none(
@@ -2159,6 +2166,7 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
             "fichas": "Fichas",
             "aprovados": "Aprovados",
             "vendidos": "Vendidos",
+            "respondeu": "Responderam",
         }[valor],
     )
     st.session_state["filtro_categoria"] = filtro
