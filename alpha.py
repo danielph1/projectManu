@@ -24,9 +24,12 @@ st.set_page_config(
 # PERFIS E PERMISSÕES
 # ============================================================
 #
+# Os valores abaixo aceitam tanto os nomes novos quanto os nomes
+# que aparecem nas suas tabelas atuais:
 #
 # vendedor, admin, elfenai, documento
 #
+# Internamente, o programa normaliza:
 # admin       -> gerente
 # elfenai     -> elfen_ai
 # documento   -> documentista
@@ -2143,12 +2146,11 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
     st.title("Painel de Controle")
 
     metricas = obter_metricas(usuario)
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4 = st.columns(5)
     c1.metric("Total de leads", metricas["total_leads"])
     c2.metric("Fichas geradas", metricas["total_fichas"])
     c3.metric("Aprovados", metricas["total_aprovados"])
     c4.metric("Vendidos", metricas["total_vendidos"])
-    c5.metric("Responderam", metricas["total_respondido"])
 
     filtros = ["todos", "fichas", "aprovados", "vendidos"]
     filtro_atual = st.session_state["filtro_categoria"]
