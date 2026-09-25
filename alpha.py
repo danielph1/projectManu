@@ -3733,8 +3733,8 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
     st.title("Equipe de Vendedores")
     st.caption(
         "Ranking calculado automaticamente: "
-        "lead = 100 pontos, ficha gerada = 50, "
-        "aprovação = 150 e venda = 300."
+        "lead = 1 pontos, ficha gerada = 0.5, "
+        "aprovação = 1.5 e venda = 3."
     )
 
     query = text(
@@ -3753,19 +3753,19 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
                 WHERE l.venda_concluida = TRUE OR l.vendeu = TRUE
             ) AS total_vendas,
             SUM(
-                CASE WHEN l.id IS NOT NULL THEN 100 ELSE 0 END
+                CASE WHEN l.id IS NOT NULL THEN 1 ELSE 0 END
                 + CASE
                     WHEN COALESCE(l.gerou_ficha, FALSE) = TRUE
-                    THEN 50 ELSE 0
+                    THEN 0.5 ELSE 0
                   END
                 + CASE
                     WHEN COALESCE(l.aprovou_credito, FALSE) = TRUE
-                    THEN 150 ELSE 0
+                    THEN 1.5 ELSE 0
                   END
                 + CASE
                     WHEN COALESCE(l.venda_concluida, FALSE) = TRUE
                       OR COALESCE(l.vendeu, FALSE) = TRUE
-                    THEN 300 ELSE 0
+                    THEN 3 ELSE 0
                   END
             ) AS pontos
         FROM public.vendedores v
