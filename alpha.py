@@ -437,12 +437,7 @@ def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
                 WHERE
                     COALESCE(l.venda_concluida, FALSE) = TRUE
                     OR COALESCE(l.vendeu, FALSE) = TRUE
-            ) AS total_vendidos,
-            COUNT(l.id) FILTER (
-                WHERE
-                    COALESCE(l.respondeu, FALSE) = TRUE
-                    OR COALESCE(l.respondeu, FALSE) = TRUE
-            ) AS total_respondido
+            ) AS total_vendidos
         FROM public.leads l
         WHERE {condicao}
         """
@@ -457,7 +452,6 @@ def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
             "total_fichas": int(result["total_fichas"] or 0),
             "total_aprovados": int(result["total_aprovados"] or 0),
             "total_vendidos": int(result["total_vendidos"] or 0),
-            "respondeu": int(result["respondeu"] or 0),
         }
     except Exception as erro:
         st.error(f"Erro nas métricas: {erro}")
@@ -466,7 +460,6 @@ def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
             "total_fichas": 0,
             "total_aprovados": 0,
             "total_vendidos": 0,
-            "respondeu": 0,
         }
 
 
@@ -1643,7 +1636,6 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                 telefone = :telefone,
                 vendedor_id = :vendedor_id,
                 gerou_ficha = :gerou_ficha,
-                respondeu = :respondeu,
                 venda_concluida = :venda_concluida,
                 vendeu = :venda_concluida,
                 cpf = :cpf,
@@ -1662,7 +1654,6 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                     "telefone": vazio_para_none(novo_tel),
                     "vendedor_id": novo_vendedor_id,
                     "gerou_ficha": gerou_ficha,
-                    "respondeu": respondeu,
                     "venda_concluida": venda_concluida,
                     "cpf": vazio_para_none(novo_cpf),
                     "data_nascimento": vazio_para_none(
@@ -2168,7 +2159,6 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
             "fichas": "Fichas",
             "aprovados": "Aprovados",
             "vendidos": "Vendidos",
-            "respondeu": "Responderam",
         }[valor],
     )
     st.session_state["filtro_categoria"] = filtro
