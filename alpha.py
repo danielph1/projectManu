@@ -24,12 +24,9 @@ st.set_page_config(
 # PERFIS E PERMISSÕES
 # ============================================================
 #
-# Os valores abaixo aceitam tanto os nomes novos quanto os nomes
-# que aparecem nas suas tabelas atuais:
 #
 # vendedor, admin, elfenai, documento
 #
-# Internamente, o programa normaliza:
 # admin       -> gerente
 # elfenai     -> elfen_ai
 # documento   -> documentista
@@ -437,7 +434,12 @@ def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
                 WHERE
                     COALESCE(l.venda_concluida, FALSE) = TRUE
                     OR COALESCE(l.vendeu, FALSE) = TRUE
-            ) AS total_vendidos
+            ) AS total_vendidos,
+            COUNT(l.id) FILTER (
+                WHERE
+                    COALESCE(l.total_respondeu, FALSE) = TRUE
+                    OR COALESCE(l.respondeu, FALSE) = TRUE
+            ) AS total_respondido
         FROM public.leads l
         WHERE {condicao}
         """
@@ -452,6 +454,7 @@ def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
             "total_fichas": int(result["total_fichas"] or 0),
             "total_aprovados": int(result["total_aprovados"] or 0),
             "total_vendidos": int(result["total_vendidos"] or 0),
+            "total_respondido": int(result["total_respondido"] or 0),
         }
     except Exception as erro:
         st.error(f"Erro nas métricas: {erro}")
@@ -460,6 +463,7 @@ def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
             "total_fichas": 0,
             "total_aprovados": 0,
             "total_vendidos": 0,
+            "total_respondido": 0,
         }
 
 
@@ -479,7 +483,9 @@ def buscar_leads(
             OR (:categoria = 'aprovados' AND l.aprovou_credito = TRUE)
             OR (:categoria = 'vendidos' AND (
                 l.venda_concluida = TRUE OR l.vendeu = TRUE
-            ))
+            )
+            OR (:categoria = 'respondeu' AND l.total_respondeu = TRUE)
+            )
         )
         """,
         """
@@ -2137,11 +2143,12 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
     st.title("Painel de Controle")
 
     metricas = obter_metricas(usuario)
-    c1, c2, c3, c4= st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Total de leads", metricas["total_leads"])
     c2.metric("Fichas geradas", metricas["total_fichas"])
     c3.metric("Aprovados", metricas["total_aprovados"])
     c4.metric("Vendidos", metricas["total_vendidos"])
+    c5.metric("Responderam", metricas["total_respondido"])
 
     filtros = ["todos", "fichas", "aprovados", "vendidos"]
     filtro_atual = st.session_state["filtro_categoria"]
