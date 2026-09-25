@@ -1,7 +1,7 @@
 import hashlib
 import hmac
 import secrets
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Dict, Optional, Set
 
 import pandas as pd
@@ -76,6 +76,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
     "elfen_ai": {
         "view_leads",
         "use_elfen_ai",
+        "use_chat",
         "view_tasks",
         "respond_tasks",
         "view_goals",
@@ -84,6 +85,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
     },
     "financeiro": {
         "view_leads",
+        "use_chat",
         "view_financial",
         "view_tasks",
         "respond_tasks",
@@ -94,6 +96,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
     },
     "documentista": {
         "view_leads",
+        "use_chat",
         "view_documents",
         "view_tasks",
         "respond_tasks",
@@ -287,6 +290,7 @@ def limpar_sessao():
         "pagina_atual",
         "chat_vendedor_selecionado",
         "abrir_formulario",
+        "filtro_vendedor_id",
     ]
 
     for chave in chaves_para_limpar:
@@ -303,6 +307,7 @@ def inicializar_sessao():
         "chat_vendedor_selecionado": None,
         "abrir_formulario": False,
         "banco_filtro": None,
+        "filtro_vendedor_id": None,
     }
 
     for chave, valor in defaults.items():
@@ -350,7 +355,12 @@ def escopo_leads(usuario: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
         """, {}
 
     if tipo == "documentista":
-        return "COALESCE(l.gerou_ficha, FALSE) = TRUE", {}
+        return """
+            (
+                COALESCE(l.venda_concluida, FALSE) = TRUE
+                OR COALESCE(l.vendeu, FALSE) = TRUE
+            )
+        """, {}
 
     return "FALSE", {}
 
@@ -420,8 +430,24 @@ def obter_vendedores() -> pd.DataFrame:
             return pd.DataFrame(columns=["id", "nome", "foto_url"])
 
 
-def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
+def obter_metricas(
+    usuario: Dict[str, Any],
+    vendedor_filtro: Optional[int] = None,
+    data_inicio: Optional[date] = None,
+    data_fim: Optional[date] = None,
+) -> Dict[str, int]:
     condicao, parametros = escopo_leads(usuario)
+    filtros = [condicao]
+
+    if vendedor_filtro is not None:
+        filtros.append("l.vendedor_id = :metricas_vendedor_id")
+        parametros["metricas_vendedor_id"] = vendedor_filtro
+    if data_inicio is not None:
+        filtros.append("l.data_lead >= :metricas_data_inicio")
+        parametros["metricas_data_inicio"] = data_inicio
+    if data_fim is not None:
+        filtros.append("l.data_lead < :metricas_data_fim")
+        parametros["metricas_data_fim"] = data_fim + timedelta(days=1)
 
     query = text(
         f"""
@@ -434,17 +460,15 @@ def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
                 WHERE COALESCE(l.aprovou_credito, FALSE) = TRUE
             ) AS total_aprovados,
             COUNT(l.id) FILTER (
+                WHERE COALESCE(l.respondeu, FALSE) = TRUE
+            ) AS total_responderam,
+            COUNT(l.id) FILTER (
                 WHERE
                     COALESCE(l.venda_concluida, FALSE) = TRUE
                     OR COALESCE(l.vendeu, FALSE) = TRUE
-            ) AS total_vendidos,
-            COUNT(l.id) FILTER (
-                WHERE
-                    COALESCE(l.total_respondeu, FALSE) = TRUE
-                    OR COALESCE(l.respondeu, FALSE) = TRUE
-            ) AS total_respondido
+            ) AS total_vendidos
         FROM public.leads l
-        WHERE {condicao}
+        WHERE {" AND ".join(f"({filtro})" for filtro in filtros)}
         """
     )
 
@@ -456,8 +480,8 @@ def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
             "total_leads": int(result["total_leads"] or 0),
             "total_fichas": int(result["total_fichas"] or 0),
             "total_aprovados": int(result["total_aprovados"] or 0),
+            "total_responderam": int(result["total_responderam"] or 0),
             "total_vendidos": int(result["total_vendidos"] or 0),
-            "total_respondido": int(result["total_respondido"] or 0),
         }
     except Exception as erro:
         st.error(f"Erro nas métricas: {erro}")
@@ -465,8 +489,8 @@ def obter_metricas(usuario: Dict[str, Any]) -> Dict[str, int]:
             "total_leads": 0,
             "total_fichas": 0,
             "total_aprovados": 0,
+            "total_responderam": 0,
             "total_vendidos": 0,
-            "total_respondido": 0,
         }
 
 
@@ -474,6 +498,9 @@ def buscar_leads(
     usuario: Dict[str, Any],
     categoria: str,
     termo_busca: str,
+    vendedor_filtro: Optional[int] = None,
+    data_inicio: Optional[date] = None,
+    data_fim: Optional[date] = None,
 ) -> pd.DataFrame:
     escopo, parametros = escopo_leads(usuario)
 
@@ -483,12 +510,18 @@ def buscar_leads(
         (
             :categoria = 'todos'
             OR (:categoria = 'fichas' AND l.gerou_ficha = TRUE)
-            OR (:categoria = 'aprovados' AND l.aprovou_credito = TRUE)
+            OR (
+                :categoria = 'aprovados'
+                AND l.gerou_ficha = TRUE
+                AND l.aprovou_credito = TRUE
+            )
+            OR (
+                :categoria = 'responderam'
+                AND l.respondeu = TRUE
+            )
             OR (:categoria = 'vendidos' AND (
                 l.venda_concluida = TRUE OR l.vendeu = TRUE
-            )
-            OR (:categoria = 'respondeu' AND l.total_respondeu = TRUE)
-            )
+            ))
         )
         """,
         """
@@ -500,6 +533,24 @@ def buscar_leads(
             OR l.observacao ILIKE :termo
         )
         """,
+        """
+        (
+            :vendedor_filtro IS NULL
+            OR l.vendedor_id = :vendedor_filtro
+        )
+        """,
+        """
+        (
+            :data_inicio IS NULL
+            OR l.data_lead >= :data_inicio
+        )
+        """,
+        """
+        (
+            :data_fim IS NULL
+            OR l.data_lead < :data_fim
+        )
+        """,
     ]
 
     parametros.update(
@@ -507,6 +558,13 @@ def buscar_leads(
             "categoria": categoria,
             "busca": termo_busca.strip(),
             "termo": f"%{termo_busca.strip()}%",
+            "vendedor_filtro": vendedor_filtro,
+            "data_inicio": data_inicio,
+            "data_fim": (
+                data_fim + timedelta(days=1)
+                if data_fim is not None
+                else None
+            ),
         }
     )
 
@@ -520,11 +578,13 @@ def buscar_leads(
             l.gerou_ficha,
             l.venda_concluida,
             l.vendeu,
+            l.respondeu,
             l.cpf,
             l.data_nascimento,
             l.habilitado,
             l.aprovou_credito,
             l.observacao,
+            l.valor_entrada,
             l.updated_at,
             l.vendedor_id,
             v.nome AS nome_vendedor
@@ -739,6 +799,25 @@ def converter_data(valor: Any) -> date:
     return pd.to_datetime(valor).date()
 
 
+def formatar_data_br(
+    valor: Any,
+    incluir_hora: bool = False,
+    padrao: str = "-",
+) -> str:
+    """Exibe datas do banco no padrão brasileiro, sem alterar o banco."""
+    if valor is None:
+        return padrao
+    try:
+        if pd.isna(valor):
+            return padrao
+        data = pd.to_datetime(valor)
+        formato = "%d/%m/%Y %H:%M" if incluir_hora else "%d/%m/%Y"
+        return data.strftime(formato)
+    except (TypeError, ValueError, OverflowError):
+        texto = str(valor).strip()
+        return texto or padrao
+
+
 def numero_seguro(valor: Any, padrao: float = 0.0) -> float:
     if valor is None or pd.isna(valor):
         return padrao
@@ -852,6 +931,62 @@ def criar_notificacao_vendedor(
     )
 
 
+def criar_notificacao_nova_ficha(
+    vendedor_id: Optional[int],
+    ficha_id: int,
+    nome_cliente: str,
+    conn: Any,
+) -> None:
+    """
+    Avisa o vendedor responsável e todos os gerentes ativos.
+    Assim a ficha pendente não depende de alguém abrir a tela.
+    """
+    if not vendedor_id:
+        filtro_vendedor = "FALSE"
+    else:
+        filtro_vendedor = "u.vendedor_id = :vendedor_id"
+
+    conn.execute(
+        text(
+            f"""
+            INSERT INTO public.notificacoes (
+                usuario_id,
+                tipo,
+                titulo,
+                mensagem,
+                ficha_id
+            )
+            SELECT
+                u.id,
+                'nova_ficha',
+                'Nova ficha de crédito pendente',
+                :mensagem,
+                :ficha_id
+            FROM public.usuarios u
+            WHERE COALESCE(u.ativo, TRUE) = TRUE
+              AND (
+                    {filtro_vendedor}
+                    OR LOWER(REPLACE(u.tipo, '-', '_')) IN (
+                        'gerente',
+                        'admin',
+                        'administrador',
+                        'dono',
+                        'owner'
+                    )
+              )
+            """
+        ),
+        {
+            "vendedor_id": vendedor_id,
+            "mensagem": (
+                f"A ficha de {nome_cliente} foi criada e está "
+                "aguardando análise dos bancos."
+            ),
+            "ficha_id": ficha_id,
+        },
+    )
+
+
 def criar_ficha_credito(
     conn: Any,
     lead_id: int,
@@ -915,6 +1050,23 @@ def criar_ficha_credito(
             ),
             {"ficha_id": ficha_id, "banco": banco},
         )
+
+    nome_cliente = conn.execute(
+        text(
+            """
+            SELECT COALESCE(nome_completo, nome_lead, 'Cliente')
+            FROM public.leads
+            WHERE id = :lead_id
+            """
+        ),
+        {"lead_id": lead_id},
+    ).scalar() or "Cliente"
+    criar_notificacao_nova_ficha(
+        vendedor_id=vendedor_id,
+        ficha_id=int(ficha_id),
+        nome_cliente=str(nome_cliente),
+        conn=conn,
+    )
 
     return int(ficha_id)
 
@@ -1050,7 +1202,7 @@ def obter_analises_banco(ficha_id: int) -> pd.DataFrame:
             valor_financiado,
             valor_entrada,
             parcela_48,
-            parcela_60,
+            parcela_64,
             observacao,
             atualizado_por_id,
             updated_at
@@ -1118,6 +1270,116 @@ def obter_fichas_com_valor_pendente() -> pd.DataFrame:
         return pd.read_sql_query(query, conn)
 
 
+def obter_fichas_documentais() -> pd.DataFrame:
+    query = text(
+        """
+        SELECT
+            f.id AS ficha_id,
+            f.lead_id,
+            f.vendedor_id,
+            f.status_geral,
+            f.data_compra,
+            f.updated_at AS ficha_updated_at,
+            l.nome_lead,
+            l.nome_completo,
+            l.cpf,
+            l.telefone,
+            l.data_nascimento,
+            l.produto_interesse,
+            l.venda_concluida,
+            l.vendeu,
+            v.nome AS vendedor_nome,
+            COALESCE(p.status, 'nao_iniciado') AS transferencia_status,
+            p.observacao AS transferencia_observacao,
+            p.updated_at AS transferencia_updated_at
+        FROM public.fichas_credito f
+        JOIN public.leads l
+            ON l.id = f.lead_id
+        LEFT JOIN public.vendedores v
+            ON v.id = f.vendedor_id
+        LEFT JOIN public.processos_transferencia p
+            ON p.ficha_id = f.id
+        WHERE (
+            f.comprou = TRUE
+            OR COALESCE(l.venda_concluida, FALSE) = TRUE
+            OR COALESCE(l.vendeu, FALSE) = TRUE
+        )
+        ORDER BY
+            CASE COALESCE(p.status, 'nao_iniciado')
+                WHEN 'em_andamento' THEN 1
+                WHEN 'nao_iniciado' THEN 2
+                WHEN 'pronto' THEN 3
+                ELSE 4
+            END,
+            f.updated_at DESC
+        """
+    )
+
+    with engine.connect() as conn:
+        return pd.read_sql_query(query, conn)
+
+
+def salvar_processo_transferencia(
+    usuario: Dict[str, Any],
+    ficha: pd.Series,
+    status: str,
+    observacao: str,
+) -> None:
+    if usuario["tipo"] not in {"documentista", "gerente"}:
+        st.error("Você não pode atualizar o processo documental.")
+        return
+
+    status_validos = {"nao_iniciado", "em_andamento", "pronto"}
+    if status not in status_validos:
+        st.error("Status de transferência inválido.")
+        return
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO public.processos_transferencia (
+                        ficha_id,
+                        status,
+                        observacao,
+                        atualizado_por_id
+                    )
+                    VALUES (
+                        :ficha_id,
+                        :status,
+                        :observacao,
+                        :usuario_id
+                    )
+                    ON CONFLICT (ficha_id) DO UPDATE
+                    SET status = EXCLUDED.status,
+                        observacao = EXCLUDED.observacao,
+                        atualizado_por_id = EXCLUDED.atualizado_por_id,
+                        updated_at = NOW()
+                    """
+                ),
+                {
+                    "ficha_id": int(ficha["ficha_id"]),
+                    "status": status,
+                    "observacao": observacao.strip() or None,
+                    "usuario_id": usuario["id"],
+                },
+            )
+
+            criar_notificacao_vendedor(
+                ficha.get("vendedor_id"),
+                int(ficha["ficha_id"]),
+                f"Transferência atualizada: {ficha['nome_lead']}",
+                f"Processo documental: {status.replace('_', ' ')}.",
+                conn,
+            )
+
+        st.success("Processo de transferência atualizado.")
+        st.rerun()
+    except Exception as erro:
+        st.error(f"Erro ao salvar processo documental: {erro}")
+
+
 def recalcular_status_ficha(conn: Any, ficha_id: int) -> str:
     statuses = conn.execute(
         text(
@@ -1179,7 +1441,7 @@ def salvar_analise_banco(
     valor_financiado: Optional[float],
     valor_entrada: Optional[float],
     parcela_48: Optional[float],
-    parcela_60: Optional[float],
+    parcela_64: Optional[float],
     observacao: str,
 ) -> None:
     if not usuario_tem("edit_bank_results"):
@@ -1195,7 +1457,7 @@ def salvar_analise_banco(
         valor_financiado = None
         valor_entrada = None
         parcela_48 = None
-        parcela_60 = None
+        parcela_64 = None
 
     try:
         with engine.begin() as conn:
@@ -1208,7 +1470,7 @@ def salvar_analise_banco(
                         valor_financiado = :valor_financiado,
                         valor_entrada = :valor_entrada,
                         parcela_48 = :parcela_48,
-                        parcela_60 = :parcela_60,
+                        parcela_64 = :parcela_64,
                         observacao = :observacao,
                         atualizado_por_id = :usuario_id,
                         updated_at = NOW()
@@ -1221,7 +1483,7 @@ def salvar_analise_banco(
                     "valor_financiado": valor_financiado,
                     "valor_entrada": valor_entrada,
                     "parcela_48": parcela_48,
-                    "parcela_60": parcela_60,
+                    "parcela_64": parcela_64,
                     "observacao": observacao.strip() or None,
                     "usuario_id": usuario["id"],
                     "banco_id": banco_id,
@@ -1289,7 +1551,7 @@ def salvar_dados_financeiros_ficha(
         boleto_total = 0
     else:
         boleto_total = (
-            float(boleto_valor or 0) / int(boleto_meses or 0)
+            float(boleto_valor or 0) * int(boleto_meses or 0)
         )
 
     if gerou_boleto and (
@@ -1646,6 +1908,11 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                 respondeu = :respondeu,
                 venda_concluida = :venda_concluida,
                 vendeu = :venda_concluida,
+                aprovou_credito = CASE
+                    WHEN :gerou_ficha = TRUE AND :tem_ficha = TRUE
+                    THEN aprovou_credito
+                    ELSE NULL
+                END,
                 cpf = :cpf,
                 data_nascimento = :data_nascimento,
                 observacao = :observacao,
@@ -1655,6 +1922,19 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
         )
 
         with engine.begin() as conn:
+            tem_ficha = conn.execute(
+                text(
+                    """
+                    SELECT EXISTS(
+                        SELECT 1
+                        FROM public.fichas_credito
+                        WHERE lead_id = :lead_id
+                    )
+                    """
+                ),
+                {"lead_id": lead_data["id"]},
+            ).scalar()
+
             conn.execute(
                 query,
                 {
@@ -1664,6 +1944,7 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                     "gerou_ficha": gerou_ficha,
                     "respondeu": respondeu,
                     "venda_concluida": venda_concluida,
+                    "tem_ficha": bool(tem_ficha),
                     "cpf": vazio_para_none(novo_cpf),
                     "data_nascimento": vazio_para_none(
                         nova_data_nascimento
@@ -1672,6 +1953,17 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                     "lead_id": lead_data["id"],
                 },
             )
+
+            if gerou_ficha:
+                criar_ficha_credito(
+                    conn=conn,
+                    lead_id=int(lead_data["id"]),
+                    vendedor_id=novo_vendedor_id,
+                    valor_entrada=float(
+                        lead_data.get("valor_entrada") or 0
+                    ),
+                    usuario_id=usuario["id"],
+                )
 
         st.success("Lead atualizado com sucesso.")
         st.rerun()
@@ -1769,7 +2061,7 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
 
         pagina = st.session_state["pagina_atual"]
 
-        if usuario_tem("view_leads"):
+        if usuario_tem("view_leads") and usuario["tipo"] != "documentista":
             if st.button(
                 "Painel de Leads",
                 use_container_width=True,
@@ -1777,6 +2069,19 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
             ):
                 st.session_state["pagina_atual"] = "leads"
                 st.session_state["abrir_formulario"] = False
+                st.rerun()
+
+        if usuario["tipo"] == "documentista":
+            if st.button(
+                "Processos de Transferência",
+                use_container_width=True,
+                type=(
+                    "primary"
+                    if pagina in {"documentos", "leads"}
+                    else "secondary"
+                ),
+            ):
+                st.session_state["pagina_atual"] = "documentos"
                 st.rerun()
 
         if usuario_tem("view_team"):
@@ -1789,8 +2094,8 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
                 st.rerun()
 
         if usuario_tem("use_chat"):
-            total_nao_lidas = contar_mensagens_nao_lidas(
-                usuario.get("vendedor_id")
+            total_nao_lidas = contar_chat_geral_nao_lidas(
+                usuario["id"]
             )
             label_chat = "Central de Chat"
             if total_nao_lidas:
@@ -2073,7 +2378,10 @@ def mostrar_card_lead(
             f"{row.get('nome_vendedor') or 'Não atribuído'}"
         )
         st.write(f"**Telefone:** {row.get('telefone') or '-'}")
-        st.write(f"**Data do lead:** {row.get('data_lead') or '-'}")
+        st.write(
+            f"**Data do lead:** "
+            f"{formatar_data_br(row.get('data_lead'))}"
+        )
         st.write(
             f"**Ficha gerada:** "
             f"{'Sim' if row.get('gerou_ficha') else 'Não'}"
@@ -2086,14 +2394,14 @@ def mostrar_card_lead(
                 st.write(f"**CPF:** {row.get('cpf') or 'Não informado'}")
                 st.write(
                     f"**Data de nascimento:** "
-                    f"{row.get('data_nascimento') or 'Não informada'}"
+                    f"{formatar_data_br(row.get('data_nascimento'), padrao='Não informada')}"
                 )
                 st.write(
                     f"**Habilitado:** "
                     f"{'Sim' if row.get('habilitado') else 'Não'}"
                 )
 
-        if usuario_tem("view_financial"):
+        if usuario_tem("view_financial") and row.get("gerou_ficha"):
             aprovado = row.get("aprovou_credito")
             if aprovado is True:
                 st.success("Crédito: aprovado")
@@ -2135,25 +2443,115 @@ def mostrar_card_lead(
 
         atualizado = row.get("updated_at")
         if atualizado:
-            st.caption(f"Atualizado em: {atualizado}")
+            st.caption(
+                "Atualizado em: "
+                f"{formatar_data_br(atualizado, incluir_hora=True)}"
+            )
 
 
 # ============================================================
 # PÁGINAS
 # ============================================================
 
+def pagina_documentista(usuario: Dict[str, Any]) -> None:
+    if usuario["tipo"] not in {"documentista", "gerente"}:
+        st.error("Você não tem permissão para acessar documentos.")
+        return
+
+    st.title("Processos de Transferência")
+    st.caption(
+        "Somente clientes vendidos. O documentista atualiza o andamento "
+        "da transferência; o gerente também pode revisar e alterar."
+    )
+
+    try:
+        fichas = obter_fichas_documentais()
+    except Exception as erro:
+        st.error(
+            "Execute schema_operacao_v3.sql no Supabase antes de abrir "
+            f"esta área. Detalhe: {erro}"
+        )
+        return
+
+    if fichas.empty:
+        st.info("Nenhum cliente vendido encontrado.")
+        return
+
+    nomes_status = {
+        "nao_iniciado": "Não iniciado",
+        "em_andamento": "Em andamento",
+        "pronto": "Pronto",
+    }
+    status_opcoes = list(nomes_status)
+
+    for _, ficha in fichas.iterrows():
+        status_atual = ficha.get("transferencia_status") or "nao_iniciado"
+        status_label = nomes_status.get(status_atual, status_atual)
+        cliente = (
+            ficha.get("nome_completo")
+            or ficha.get("nome_lead")
+            or "Cliente"
+        )
+
+        with st.expander(
+            f"{'✅' if status_atual == 'pronto' else '⏳'} "
+            f"{cliente} — {status_label}",
+            expanded=status_atual != "pronto",
+        ):
+            c1, c2, c3 = st.columns(3)
+            c1.write(f"**CPF:** {ficha.get('cpf') or '-'}")
+            c2.write(f"**Telefone:** {ficha.get('telefone') or '-'}")
+            c3.write(
+                f"**Vendedor:** {ficha.get('vendedor_nome') or '-'}"
+            )
+            c4, c5, c6 = st.columns(3)
+            c4.write(
+                f"**Nascimento:** "
+                f"{formatar_data_br(ficha.get('data_nascimento'))}"
+            )
+            c5.write(f"**Carro:** {ficha.get('produto_interesse') or '-'}")
+            c6.write(
+                f"**Venda:** "
+                f"{formatar_data_br(ficha.get('data_compra'))}"
+            )
+
+            with st.form(f"form_transferencia_{ficha['ficha_id']}"):
+                novo_status = st.selectbox(
+                    "Situação da transferência",
+                    status_opcoes,
+                    index=(
+                        status_opcoes.index(status_atual)
+                        if status_atual in status_opcoes
+                        else 0
+                    ),
+                    format_func=lambda valor: nomes_status[valor],
+                )
+                nova_observacao = st.text_area(
+                    "Observação",
+                    value=str(ficha.get("transferencia_observacao") or ""),
+                    placeholder=(
+                        "Ex.: documento enviado ao despachante, "
+                        "aguardando assinatura..."
+                    ),
+                )
+                salvar = st.form_submit_button(
+                    "Salvar processo",
+                    use_container_width=True,
+                )
+
+            if salvar:
+                salvar_processo_transferencia(
+                    usuario,
+                    ficha,
+                    novo_status,
+                    nova_observacao,
+                )
+
+
 def pagina_leads(usuario: Dict[str, Any]) -> None:
     st.title("Painel de Controle")
 
-    metricas = obter_metricas(usuario)
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Total de leads", metricas["total_leads"])
-    c2.metric("Fichas geradas", metricas["total_fichas"])
-    c3.metric("Aprovados", metricas["total_aprovados"])
-    c4.metric("Vendidos", metricas["total_vendidos"])
-    c5.metric("Responderam", metricas["total_respondido"])
-
-    filtros = ["todos", "fichas", "aprovados", "vendidos"]
+    filtros = ["todos", "fichas", "aprovados", "responderam", "vendidos"]
     filtro_atual = st.session_state["filtro_categoria"]
 
     filtro = st.radio(
@@ -2167,10 +2565,99 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
             "todos": "Todos",
             "fichas": "Fichas",
             "aprovados": "Aprovados",
-            "vendidos": "Vendidos"
+            "responderam": "Responderam",
+            "vendidos": "Vendidos",
         }[valor],
     )
     st.session_state["filtro_categoria"] = filtro
+
+    col_filtro_1, col_filtro_2 = st.columns(2)
+    with col_filtro_1:
+        periodo_opcoes = [
+            "todos",
+            "mes_atual",
+            "mes_anterior",
+            "personalizado",
+        ]
+        periodo = st.selectbox(
+            "Período da data do lead",
+            periodo_opcoes,
+            format_func=lambda valor: {
+                "todos": "Todas as datas",
+                "mes_atual": "Este mês",
+                "mes_anterior": "Mês anterior",
+                "personalizado": "Escolher período",
+            }[valor],
+        )
+
+    data_inicio = None
+    data_fim = None
+    hoje = date.today()
+    primeiro_mes_atual = hoje.replace(day=1)
+    if periodo == "mes_atual":
+        data_inicio = primeiro_mes_atual
+        if primeiro_mes_atual.month == 12:
+            data_fim = primeiro_mes_atual.replace(
+                year=primeiro_mes_atual.year + 1,
+                month=1,
+            ) - timedelta(days=1)
+        else:
+            data_fim = primeiro_mes_atual.replace(
+                month=primeiro_mes_atual.month + 1
+            ) - timedelta(days=1)
+    elif periodo == "mes_anterior":
+        data_fim = primeiro_mes_atual - timedelta(days=1)
+        data_inicio = data_fim.replace(day=1)
+    elif periodo == "personalizado":
+        with col_filtro_2:
+            datas = st.date_input(
+                "Data inicial e final",
+                value=(primeiro_mes_atual, hoje),
+            )
+        if isinstance(datas, (tuple, list)) and len(datas) == 2:
+            data_inicio, data_fim = datas
+        else:
+            st.info("Escolha a data inicial e a data final.")
+    else:
+        with col_filtro_2:
+            st.caption("Exibindo leads de todas as datas.")
+
+    try:
+        df_vendedores = obter_vendedores()
+    except Exception as erro:
+        st.error(f"Erro ao carregar vendedores: {erro}")
+        return
+
+    vendedor_filtro = None
+    if usuario["tipo"] != "vendedor" and not df_vendedores.empty:
+        ids_vendedores = [None] + df_vendedores["id"].tolist()
+        nomes_vendedores = {None: "Todos os vendedores"}
+        nomes_vendedores.update(
+            dict(zip(df_vendedores["id"], df_vendedores["nome"]))
+        )
+        filtro_salvo = st.session_state.get("filtro_vendedor_id")
+        if filtro_salvo not in ids_vendedores:
+            filtro_salvo = None
+        vendedor_filtro = st.selectbox(
+            "Vendedor",
+            options=ids_vendedores,
+            index=ids_vendedores.index(filtro_salvo),
+            format_func=lambda valor: nomes_vendedores[valor],
+        )
+        st.session_state["filtro_vendedor_id"] = vendedor_filtro
+
+    metricas = obter_metricas(
+        usuario,
+        vendedor_filtro=vendedor_filtro,
+        data_inicio=data_inicio,
+        data_fim=data_fim,
+    )
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Total de leads", metricas["total_leads"])
+    c2.metric("Fichas geradas", metricas["total_fichas"])
+    c3.metric("Aprovados", metricas["total_aprovados"])
+    c4.metric("Responderam", metricas["total_responderam"])
+    c5.metric("Vendidos", metricas["total_vendidos"])
 
     if st.session_state.get("abrir_formulario"):
         mostrar_formulario_novo_lead(
@@ -2185,8 +2672,14 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
     )
 
     try:
-        df_vendedores = obter_vendedores()
-        df = buscar_leads(usuario, filtro, busca)
+        df = buscar_leads(
+            usuario,
+            filtro,
+            busca,
+            vendedor_filtro=vendedor_filtro,
+            data_inicio=data_inicio,
+            data_fim=data_fim,
+        )
     except Exception as erro:
         st.error(f"Erro ao carregar leads: {erro}")
         return
@@ -2406,14 +2899,21 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
             try:
                 pendentes = obter_fichas_com_valor_pendente()
                 with st.expander(
-                    "Valor pendente — clientes com boleto",
+                    "💰 Valor pendente — clientes com boleto",
                     expanded=True,
                 ):
                     if pendentes.empty:
                         st.info("Nenhum cliente com valor pendente.")
                     else:
                         st.dataframe(
-                            pendentes.rename(
+                            pendentes.assign(
+                                data_nascimento=pendentes[
+                                    "data_nascimento"
+                                ].map(formatar_data_br),
+                                data_compra=pendentes[
+                                    "data_compra"
+                                ].map(formatar_data_br),
+                            ).rename(
                                 columns={
                                     "nome_completo": "cliente",
                                     "telefone": "telefone",
@@ -2514,7 +3014,7 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
             col_cliente_4, col_cliente_5, col_cliente_6 = st.columns(3)
             col_cliente_4.write(
                 f"**Data de nascimento:** "
-                f"{ficha.get('data_nascimento') or '-'}"
+                f"{formatar_data_br(ficha.get('data_nascimento'))}"
             )
             col_cliente_5.write(
                 f"**Habilitado:** "
@@ -2683,10 +3183,10 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                                     value=numero_banco("parcela_48"),
                                     step=10.0,
                                 )
-                                nova_parcela_60 = b4.number_input(
-                                    "Parcela em 60x",
+                                nova_parcela_64 = b4.number_input(
+                                    "Parcela em 64x",
                                     min_value=0.0,
-                                    value=numero_banco("parcela_60"),
+                                    value=numero_banco("parcela_64"),
                                     step=10.0,
                                 )
                                 nova_observacao = st.text_area(
@@ -2715,7 +3215,7 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                                     valor_financiado_final,
                                     nova_entrada,
                                     nova_parcela_48,
-                                    nova_parcela_60,
+                                    nova_parcela_64,
                                     nova_observacao,
                                 )
                         else:
@@ -2735,8 +3235,8 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                                     f"R$ {float(banco.get('parcela_48') or 0):,.2f}",
                                 )
                                 a4.metric(
-                                    "60x",
-                                    f"R$ {float(banco.get('parcela_60') or 0):,.2f}",
+                                    "64x",
+                                    f"R$ {float(banco.get('parcela_64') or 0):,.2f}",
                                 )
                             if banco.get("observacao"):
                                 st.caption(banco["observacao"])
@@ -2862,8 +3362,8 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                     )
                     if gerou_boleto and comprou:
                         st.caption(
-                            "Total mensal de boletos: "
-                            f"R$ {boleto_valor / boleto_meses:,.2f}"
+                            "Total previsto em boletos: "
+                            f"R$ {boleto_valor * boleto_meses:,.2f}"
                         )
                     salvar_financeiro = st.form_submit_button(
                         "Salvar compra e boleto",
@@ -2920,155 +3420,305 @@ def pagina_elfen_ai() -> None:
     pagina_fichas(st.session_state["usuario_logado"])
 
 
+def contar_chat_geral_nao_lidas(usuario_id: int) -> int:
+    query = text(
+        """
+        SELECT COUNT(*)
+        FROM public.chat_geral_mensagens m
+        WHERE m.remetente_id <> :usuario_id
+          AND NOT EXISTS (
+              SELECT 1
+              FROM public.chat_geral_leituras l
+              WHERE l.mensagem_id = m.id
+                AND l.usuario_id = :usuario_id
+          )
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            return int(
+                conn.execute(query, {"usuario_id": usuario_id}).scalar()
+                or 0
+            )
+    except Exception:
+        return 0
+
+
+def marcar_chat_geral_como_lido(usuario_id: int) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO public.chat_geral_leituras (
+                    mensagem_id,
+                    usuario_id
+                )
+                SELECT m.id, :usuario_id
+                FROM public.chat_geral_mensagens m
+                WHERE m.remetente_id <> :usuario_id
+                ON CONFLICT (mensagem_id, usuario_id) DO NOTHING
+                """
+            ),
+            {"usuario_id": usuario_id},
+        )
+
+
+def obter_chat_geral() -> pd.DataFrame:
+    query = text(
+        """
+        SELECT
+            m.id,
+            m.remetente_id,
+            m.mensagem,
+            m.tipo,
+            m.arquivo_nome,
+            m.arquivo_mime,
+            m.arquivo_bytes,
+            m.created_at,
+            u.nome AS nome_remetente,
+            COUNT(r.id) FILTER (WHERE r.reacao = '👍')
+                AS reacoes_like
+        FROM public.chat_geral_mensagens m
+        JOIN public.usuarios u
+            ON u.id = m.remetente_id
+        LEFT JOIN public.chat_geral_reacoes r
+            ON r.mensagem_id = m.id
+        GROUP BY
+            m.id,
+            u.nome
+        ORDER BY m.created_at ASC
+        """
+    )
+    with engine.connect() as conn:
+        return pd.read_sql_query(query, conn)
+
+
+def alternar_reacao_chat(
+    mensagem_id: int,
+    usuario_id: int,
+    reacao: str = "👍",
+) -> None:
+    with engine.begin() as conn:
+        existe = conn.execute(
+            text(
+                """
+                SELECT 1
+                FROM public.chat_geral_reacoes
+                WHERE mensagem_id = :mensagem_id
+                  AND usuario_id = :usuario_id
+                  AND reacao = :reacao
+                """
+            ),
+            {
+                "mensagem_id": mensagem_id,
+                "usuario_id": usuario_id,
+                "reacao": reacao,
+            },
+        ).scalar()
+
+        if existe:
+            conn.execute(
+                text(
+                    """
+                    DELETE FROM public.chat_geral_reacoes
+                    WHERE mensagem_id = :mensagem_id
+                      AND usuario_id = :usuario_id
+                      AND reacao = :reacao
+                    """
+                ),
+                {
+                    "mensagem_id": mensagem_id,
+                    "usuario_id": usuario_id,
+                    "reacao": reacao,
+                },
+            )
+        else:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO public.chat_geral_reacoes (
+                        mensagem_id,
+                        usuario_id,
+                        reacao
+                    )
+                    VALUES (:mensagem_id, :usuario_id, :reacao)
+                    ON CONFLICT DO NOTHING
+                    """
+                ),
+                {
+                    "mensagem_id": mensagem_id,
+                    "usuario_id": usuario_id,
+                    "reacao": reacao,
+                },
+            )
+
+
+def salvar_mensagem_chat_geral(
+    usuario_id: int,
+    texto: str,
+    arquivo: Any = None,
+    audio: Any = None,
+) -> None:
+    arquivo_recebido = audio or arquivo
+    mensagem = texto.strip() if texto else ""
+    tipo = "texto"
+    arquivo_nome = None
+    arquivo_mime = None
+    arquivo_bytes = None
+
+    if arquivo_recebido is not None:
+        arquivo_nome = getattr(
+            arquivo_recebido,
+            "name",
+            "anexo",
+        )
+        arquivo_mime = getattr(
+            arquivo_recebido,
+            "type",
+            "application/octet-stream",
+        )
+        arquivo_bytes = arquivo_recebido.getvalue()
+        if str(arquivo_mime).startswith("audio/"):
+            tipo = "audio"
+        elif str(arquivo_mime).startswith("image/"):
+            tipo = "imagem"
+        else:
+            tipo = "arquivo"
+
+    if not mensagem and not arquivo_bytes:
+        return
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO public.chat_geral_mensagens (
+                    remetente_id,
+                    mensagem,
+                    tipo,
+                    arquivo_nome,
+                    arquivo_mime,
+                    arquivo_bytes
+                )
+                VALUES (
+                    :usuario_id,
+                    :mensagem,
+                    :tipo,
+                    :arquivo_nome,
+                    :arquivo_mime,
+                    :arquivo_bytes
+                )
+                """
+            ),
+            {
+                "usuario_id": usuario_id,
+                "mensagem": mensagem or None,
+                "tipo": tipo,
+                "arquivo_nome": arquivo_nome,
+                "arquivo_mime": arquivo_mime,
+                "arquivo_bytes": arquivo_bytes,
+            },
+        )
+
+
 def pagina_chat(usuario: Dict[str, Any]) -> None:
     if not usuario_tem("use_chat"):
         st.error("Você não tem permissão para acessar o chat.")
         return
 
-    meu_vendedor_id = usuario.get("vendedor_id")
+    usuario_id = usuario["id"]
+    st.title("Central de Chat")
+    st.caption(
+        "Chat geral para todos os usuários. A estrutura já suporta "
+        "arquivos, imagens, áudios e reações."
+    )
 
-    if not meu_vendedor_id:
-        st.warning(
-            "Este usuário não está associado a um vendedor. "
-            "Preencha o campo vendedor_id na tabela usuarios para usar "
-            "o chat."
+    try:
+        marcar_chat_geral_como_lido(usuario_id)
+        df_chat = obter_chat_geral()
+    except Exception as erro:
+        st.error(
+            "Execute schema_operacao_v3.sql no Supabase para ativar o "
+            f"chat geral. Detalhe: {erro}"
         )
         return
 
-    st.title("Central de Mensagens")
-
-    df_vendedores = obter_vendedores()
-    df_outros = df_vendedores[
-        df_vendedores["id"] != meu_vendedor_id
-    ].copy()
-
-    if df_outros.empty:
-        st.info("Não existem outros vendedores para conversar.")
-        return
-
-    ids_outros = df_outros["id"].tolist()
-    selecionado = st.session_state.get("chat_vendedor_selecionado")
-
-    if selecionado not in ids_outros:
-        selecionado = ids_outros[0]
-        st.session_state["chat_vendedor_selecionado"] = selecionado
-
-    col_lista, col_conversa = st.columns([1.2, 3])
-
-    with col_lista:
-        st.subheader("Contatos")
-
-        for _, vendedor in df_outros.iterrows():
-            vid = vendedor["id"]
-            nome = vendedor["nome"]
-            nao_lidas = contar_mensagens_nao_lidas(meu_vendedor_id, vid)
-            label = f"💬 {nome}"
-            if nao_lidas:
-                label += f" 🔴 ({nao_lidas})"
-
-            if st.button(
-                label,
-                key=f"contato_{vid}",
-                use_container_width=True,
-                type=(
-                    "primary"
-                    if vid == selecionado
-                    else "secondary"
-                ),
-            ):
-                st.session_state["chat_vendedor_selecionado"] = vid
-                st.rerun()
-
-    with col_conversa:
-        outro_id = st.session_state["chat_vendedor_selecionado"]
-        outro = df_outros[df_outros["id"] == outro_id].iloc[0]
-
-        marcar_mensagens_como_lidas(meu_vendedor_id, outro_id)
-        st.subheader(f"Conversa com {outro['nome']}")
-
-        query = text(
-            """
-            SELECT
-                c.id,
-                c.remetente_id,
-                c.destinatario_id,
-                c.mensagem,
-                c.created_at,
-                v.nome AS nome_remetente
-            FROM public.chat_mensagens c
-            JOIN public.vendedores v
-                ON v.id = c.remetente_id
-            WHERE
-                (
-                    c.remetente_id = :meu_id
-                    AND c.destinatario_id = :outro_id
+    with st.container(height=450):
+        if df_chat.empty:
+            st.caption("Nenhuma mensagem ainda.")
+        else:
+            for _, mensagem in df_chat.iterrows():
+                sou_eu = int(mensagem["remetente_id"]) == int(usuario_id)
+                horario = formatar_data_br(
+                    mensagem["created_at"],
+                    incluir_hora=True,
                 )
-                OR (
-                    c.remetente_id = :outro_id
-                    AND c.destinatario_id = :meu_id
-                )
-            ORDER BY c.created_at ASC
-            """
-        )
-
-        with engine.connect() as conn:
-            df_chat = pd.read_sql_query(
-                query,
-                conn,
-                params={
-                    "meu_id": meu_vendedor_id,
-                    "outro_id": outro_id,
-                },
-            )
-
-        area_chat = st.container(height=450)
-        with area_chat:
-            if df_chat.empty:
-                st.caption("Nenhuma mensagem ainda.")
-            else:
-                for _, mensagem in df_chat.iterrows():
-                    sou_eu = mensagem["remetente_id"] == meu_vendedor_id
-                    horario = pd.to_datetime(
-                        mensagem["created_at"]
-                    ).strftime("%H:%M - %d/%m")
-
-                    with st.chat_message(
-                        "user" if sou_eu else "assistant"
-                    ):
-                        st.caption(
-                            f"**{mensagem['nome_remetente']}** • {horario}"
-                        )
+                with st.chat_message("user" if sou_eu else "assistant"):
+                    st.caption(
+                        f"**{mensagem['nome_remetente']}** • {horario}"
+                    )
+                    if mensagem.get("mensagem"):
                         st.write(mensagem["mensagem"])
 
-        novo_texto = st.chat_input("Digite sua mensagem...")
-        if novo_texto and novo_texto.strip():
-            with engine.begin() as conn:
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO public.chat_mensagens (
-                            remetente_id,
-                            destinatario_id,
-                            mensagem,
-                            created_at,
-                            lida
+                    arquivo_bytes = mensagem.get("arquivo_bytes")
+                    if pd.notna(arquivo_bytes) and arquivo_bytes:
+                        mime = (
+                            mensagem.get("arquivo_mime")
+                            or "application/octet-stream"
                         )
-                        VALUES (
-                            :meu_id,
-                            :outro_id,
-                            :mensagem,
-                            NOW(),
-                            FALSE
+                        if str(mime).startswith("image/"):
+                            st.image(arquivo_bytes)
+                        elif str(mime).startswith("audio/"):
+                            st.audio(arquivo_bytes, format=mime)
+                        st.download_button(
+                            "Baixar anexo",
+                            data=arquivo_bytes,
+                            file_name=(
+                                mensagem.get("arquivo_nome")
+                                or "anexo"
+                            ),
+                            mime=mime,
+                            key=f"download_chat_{mensagem['id']}",
                         )
-                        """
-                    ),
-                    {
-                        "meu_id": meu_vendedor_id,
-                        "outro_id": outro_id,
-                        "mensagem": novo_texto.strip(),
-                    },
-                )
-            st.rerun()
+
+                    if st.button(
+                        f"👍 {int(mensagem.get('reacoes_like') or 0)}",
+                        key=f"reagir_chat_{mensagem['id']}",
+                    ):
+                        alternar_reacao_chat(
+                            int(mensagem["id"]),
+                            usuario_id,
+                        )
+                        st.rerun()
+
+    novo_texto = st.chat_input("Digite sua mensagem...")
+    arquivo = st.file_uploader(
+        "Anexar arquivo ou imagem",
+        type=["png", "jpg", "jpeg", "webp", "pdf", "doc", "docx"],
+        key="chat_arquivo_geral",
+    )
+    audio_input = getattr(st, "audio_input", None)
+    audio = (
+        audio_input("Gravar áudio")
+        if callable(audio_input)
+        else None
+    )
+    enviar_anexo = st.button(
+        "Enviar anexo/áudio",
+        disabled=arquivo is None and audio is None,
+    )
+
+    if novo_texto and novo_texto.strip():
+        salvar_mensagem_chat_geral(usuario_id, novo_texto)
+        st.rerun()
+    elif enviar_anexo:
+        salvar_mensagem_chat_geral(
+            usuario_id,
+            "",
+            arquivo=arquivo,
+            audio=audio,
+        )
+        st.rerun()
 
 
 def pagina_tarefas(usuario: Dict[str, Any]) -> None:
@@ -3199,7 +3849,7 @@ def pagina_tarefas(usuario: Dict[str, Any]) -> None:
             st.caption(
                 f"Destinatário: {tarefa['destinatario_nome']}  •  "
                 f"Criada por: {tarefa['criador_nome']}  •  "
-                f"Em: {tarefa['created_at']}"
+                f"Em: {formatar_data_br(tarefa['created_at'], True)}"
             )
 
             if tarefa.get("observacao"):
@@ -3499,7 +4149,8 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
     for _, meta in metas.iterrows():
         destino = meta.get("destinatario_nome") or "Todos"
         periodo = (
-            f"{meta.get('periodo_inicio')} até {meta.get('periodo_fim')}"
+            f"{formatar_data_br(meta.get('periodo_inicio'))} até "
+            f"{formatar_data_br(meta.get('periodo_fim'))}"
         )
 
         with st.expander(
@@ -3656,6 +4307,9 @@ mostrar_sidebar(usuario_atual)
 
 paginas_permitidas = {"leads"}
 
+if usuario_atual["tipo"] == "documentista":
+    paginas_permitidas.add("documentos")
+
 if usuario_tem("view_team"):
     paginas_permitidas.add("vendedores")
 
@@ -3682,7 +4336,12 @@ if st.session_state["pagina_atual"] not in paginas_permitidas:
 pagina_atual = st.session_state["pagina_atual"]
 
 if pagina_atual == "leads":
-    pagina_leads(usuario_atual)
+    if usuario_atual["tipo"] == "documentista":
+        pagina_documentista(usuario_atual)
+    else:
+        pagina_leads(usuario_atual)
+elif pagina_atual == "documentos":
+    pagina_documentista(usuario_atual)
 elif pagina_atual == "vendedores":
     pagina_vendedores(usuario_atual)
 elif pagina_atual == "chat":
