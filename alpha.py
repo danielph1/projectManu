@@ -2784,9 +2784,6 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
             data_inicio, data_fim = datas
         else:
             st.info("Escolha a data inicial e a data final.")
-    else:
-        with col_filtro_2:
-            st.caption("Exibindo leads de todas as datas.")
 
     try:
         df_vendedores = obter_vendedores()
