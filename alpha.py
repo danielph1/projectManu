@@ -2042,7 +2042,7 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
         nova_placa_carro = None
         novo_valor_carro = None
         if gerou_ficha:
-            st.markdown("### 🚗 Veículo da ficha")
+            st.markdown("### Veículo da ficha")
             ficha_col_1, ficha_col_2 = st.columns(2)
             with ficha_col_1:
                 novo_carro_selecionado = st.text_input(
