@@ -3836,16 +3836,16 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                 int(geral.get("total_fichas") or 0),
             )
             metricas[1].metric(
+                "Pendentes",
+                int(geral.get("fichas_pendentes") or 0),
+            )
+            metricas[2].metric(
                 "Aprovadas",
                 int(geral.get("fichas_aprovadas") or 0),
             )
-            metricas[2].metric(
+            metricas[3].metric(
                 "Negadas",
                 int(geral.get("fichas_negadas") or 0),
-            )
-            metricas[3].metric(
-                "Pendentes",
-                int(geral.get("fichas_pendentes") or 0),
             )
             metricas[4].metric(
                 "Compras",
