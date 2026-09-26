@@ -52,11 +52,20 @@ ROLE_ALIASES = {
     "financeiro": "financeiro",
 }
 
+LOJAS_DISPONIVEIS = ("381", "746", "NINA")
+
+
+def normalizar_loja(loja: Any) -> str:
+    valor = str(loja or "381").strip().upper()
+    return valor if valor in LOJAS_DISPONIVEIS else "381"
+
 
 PERMISSIONS: Dict[str, Set[str]] = {
     "vendedor": {
         "view_leads",
         "view_stock",
+        "view_transferencias",
+        "add_transfer_attachment",
         "create_lead",
         "edit_own_lead",
         "delete_own_lead",
@@ -77,6 +86,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
     "elfen_ai": {
         "view_leads",
         "view_stock",
+        "view_transferencias",
         "use_elfen_ai",
         "use_chat",
         "view_tasks",
@@ -88,6 +98,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
     "financeiro": {
         "view_leads",
         "view_stock",
+        "view_transferencias",
         "use_chat",
         "view_financial",
         "view_tasks",
@@ -101,6 +112,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "view_leads",
         "view_stock",
         "manage_stock",
+        "view_transferencias",
         "use_chat",
         "view_documents",
         "view_tasks",
@@ -217,20 +229,44 @@ def verificar_senha(senha_digitada: str, senha_salva: str) -> tuple[bool, bool]:
 
 def autenticar(login_input: str, senha_input: str) -> bool:
     try:
-        query = text(
-            """
-            SELECT id, nome, login, senha_hash, tipo, vendedor_id, ativo
-            FROM public.usuarios
-            WHERE LOWER(login) = LOWER(:login)
-            LIMIT 1
-            """
-        )
-
-        with engine.connect() as conn:
-            result = conn.execute(
-                query,
-                {"login": login_input.strip()},
-            ).mappings().first()
+        try:
+            query = text(
+                """
+                SELECT
+                    id,
+                    nome,
+                    login,
+                    senha_hash,
+                    tipo,
+                    vendedor_id,
+                    loja,
+                    ativo
+                FROM public.usuarios
+                WHERE LOWER(login) = LOWER(:login)
+                LIMIT 1
+                """
+            )
+            with engine.connect() as conn:
+                result = conn.execute(
+                    query,
+                    {"login": login_input.strip()},
+                ).mappings().first()
+        except Exception:
+            # Compatibilidade durante a janela entre publicar o código e
+            # executar a migração de lojas.
+            query = text(
+                """
+                SELECT id, nome, login, senha_hash, tipo, vendedor_id, ativo
+                FROM public.usuarios
+                WHERE LOWER(login) = LOWER(:login)
+                LIMIT 1
+                """
+            )
+            with engine.connect() as conn:
+                result = conn.execute(
+                    query,
+                    {"login": login_input.strip()},
+                ).mappings().first()
 
         if not result:
             return False
@@ -278,6 +314,7 @@ def autenticar(login_input: str, senha_input: str) -> bool:
             "tipo": tipo,
             "tipo_original": result["tipo"],
             "vendedor_id": result["vendedor_id"],
+            "loja": normalizar_loja(result.get("loja", "381")),
             "is_admin": tipo == "gerente",
         }
 
@@ -300,6 +337,12 @@ def limpar_sessao():
         "busca_lead_aplicada",
         "busca_estoque_campo",
         "busca_estoque_aplicada",
+        "busca_ficha_campo",
+        "busca_ficha_aplicada",
+        "fichas_limite",
+        "fichas_filtro_chave",
+        "ficha_detalhe_id",
+        "transferencia_aberta_id",
     ]
 
     for chave in chaves_para_limpar:
@@ -321,6 +364,9 @@ def inicializar_sessao():
         "leads_filtro_chave": None,
         "busca_lead_aplicada": "",
         "busca_estoque_aplicada": "",
+        "fichas_limite": 24,
+        "fichas_filtro_chave": None,
+        "busca_ficha_aplicada": "",
     }
 
     for chave, valor in defaults.items():
@@ -409,7 +455,7 @@ def obter_vendedores() -> pd.DataFrame:
     try:
         query = text(
             """
-            SELECT id, nome
+            SELECT id, nome, loja
             FROM public.vendedores
             WHERE COALESCE(ativo, TRUE) = TRUE
             ORDER BY nome
@@ -439,6 +485,7 @@ def obter_vendedores() -> pd.DataFrame:
                     conn,
                 )
             df["foto_url"] = None
+            df["loja"] = "381"
             return df
         except Exception:
             return pd.DataFrame(columns=["id", "nome", "foto_url"])
@@ -662,18 +709,80 @@ def contar_mensagens_nao_lidas(
         return 0
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def obter_usuarios_ativos() -> pd.DataFrame:
-    query = text(
-        """
-        SELECT id, nome, login, tipo, ativo
-        FROM public.usuarios
-        WHERE COALESCE(ativo, TRUE) = TRUE
-        ORDER BY nome
-        """
-    )
+    try:
+        query = text(
+            """
+            SELECT id, nome, login, tipo, vendedor_id, loja, ativo
+            FROM public.usuarios
+            WHERE COALESCE(ativo, TRUE) = TRUE
+            ORDER BY nome
+            """
+        )
+        with engine.connect() as conn:
+            return pd.read_sql_query(query, conn)
+    except Exception:
+        query = text(
+            """
+            SELECT id, nome, login, tipo, vendedor_id, ativo
+            FROM public.usuarios
+            WHERE COALESCE(ativo, TRUE) = TRUE
+            ORDER BY nome
+            """
+        )
+        with engine.connect() as conn:
+            usuarios = pd.read_sql_query(query, conn)
+        usuarios["loja"] = "381"
+        return usuarios
 
-    with engine.connect() as conn:
-        return pd.read_sql_query(query, conn)
+
+def atualizar_loja_usuario(usuario_id: int, loja: str) -> None:
+    loja_normalizada = normalizar_loja(loja)
+    try:
+        with engine.begin() as conn:
+            usuario = conn.execute(
+                text(
+                    """
+                    SELECT vendedor_id
+                    FROM public.usuarios
+                    WHERE id = :usuario_id
+                    """
+                ),
+                {"usuario_id": usuario_id},
+            ).mappings().first()
+            conn.execute(
+                text(
+                    """
+                    UPDATE public.usuarios
+                    SET loja = :loja
+                    WHERE id = :usuario_id
+                    """
+                ),
+                {
+                    "loja": loja_normalizada,
+                    "usuario_id": usuario_id,
+                },
+            )
+            if usuario and usuario.get("vendedor_id"):
+                conn.execute(
+                    text(
+                        """
+                        UPDATE public.vendedores
+                        SET loja = :loja
+                        WHERE id = :vendedor_id
+                        """
+                    ),
+                    {
+                        "loja": loja_normalizada,
+                        "vendedor_id": usuario["vendedor_id"],
+                    },
+                )
+        st.cache_data.clear()
+        st.success("Loja atualizada.")
+        st.rerun()
+    except Exception as erro:
+        st.error(f"Erro ao atualizar loja: {erro}")
 
 
 @st.cache_data(ttl=20, show_spinner=False)
@@ -1131,6 +1240,7 @@ def salvar_anexos_ficha(
         )
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def obter_anexos_ficha(ficha_id: int) -> pd.DataFrame:
     query = text(
         """
@@ -1161,6 +1271,7 @@ def mostrar_anexos_ficha(
     ficha_id: int,
     usuario: Dict[str, Any],
     chave: str,
+    expandido: bool = False,
 ) -> None:
     """Mostra e, quando permitido, recebe documentos da ficha."""
     try:
@@ -1174,7 +1285,7 @@ def mostrar_anexos_ficha(
 
     with st.expander(
         f"📎 Documentos e anexos ({len(anexos)})",
-        expanded=False,
+        expanded=expandido,
     ):
         if anexos.empty:
             st.caption("Nenhum anexo enviado.")
@@ -1202,8 +1313,21 @@ def mostrar_anexos_ficha(
                     mime=mime,
                     key=f"baixar_anexo_{chave}_{anexo['id']}",
                 )
+                if usuario_tem("view_documents"):
+                    if st.button(
+                        "Excluir",
+                        key=f"excluir_anexo_{chave}_{anexo['id']}",
+                    ):
+                        excluir_anexo_ficha_modal(
+                            ficha_id,
+                            int(anexo["id"]),
+                            str(nome),
+                        )
 
-        if usuario_tem("view_documents"):
+        if (
+            usuario_tem("view_documents")
+            or usuario_tem("add_transfer_attachment")
+        ):
             novos_anexos = st.file_uploader(
                 "Adicionar documentos",
                 type=[
@@ -1233,17 +1357,123 @@ def mostrar_anexos_ficha(
                             usuario["id"],
                             novos_anexos,
                         )
+                    st.cache_data.clear()
                     st.success("Anexos adicionados à ficha.")
                     st.rerun()
                 except Exception as erro:
                     st.error(f"Erro ao salvar anexos: {erro}")
 
 
+def excluir_anexo_ficha(
+    ficha_id: int,
+    anexo_id: int,
+) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                DELETE FROM public.ficha_anexos
+                WHERE id = :anexo_id
+                  AND ficha_id = :ficha_id
+                """
+            ),
+            {
+                "anexo_id": anexo_id,
+                "ficha_id": ficha_id,
+            },
+        )
+
+
+@st.dialog("Excluir documento")
+def excluir_anexo_ficha_modal(
+    ficha_id: int,
+    anexo_id: int,
+    nome_arquivo: str,
+) -> None:
+    usuario = st.session_state["usuario_logado"]
+    if not usuario_tem("view_documents"):
+        st.error("Somente gerente e documentista podem excluir documentos.")
+        return
+
+    st.warning(
+        f"O arquivo **{nome_arquivo}** será excluído definitivamente."
+    )
+    confirmar = st.button(
+        "Excluir arquivo",
+        type="primary",
+        use_container_width=True,
+    )
+    if confirmar:
+        try:
+            excluir_anexo_ficha(ficha_id, anexo_id)
+            st.cache_data.clear()
+            st.success("Arquivo excluído.")
+            st.rerun()
+        except Exception as erro:
+            st.error(f"Erro ao excluir arquivo: {erro}")
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def obter_contagem_anexos_fichas(
+    ficha_ids: tuple[int, ...],
+) -> Dict[int, int]:
+    if not ficha_ids:
+        return {}
+
+    ids_sql = ",".join(str(int(ficha_id)) for ficha_id in ficha_ids)
+    query = text(
+        f"""
+        SELECT ficha_id, COUNT(*) AS total
+        FROM public.ficha_anexos
+        WHERE ficha_id IN ({ids_sql})
+        GROUP BY ficha_id
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            resultado = conn.execute(query).mappings().all()
+        return {
+            int(item["ficha_id"]): int(item["total"] or 0)
+            for item in resultado
+        }
+    except Exception:
+        return {}
+
+
+@st.dialog("Documentos da ficha")
+def abrir_anexos_ficha_modal(
+    ficha_id: int,
+    usuario: Dict[str, Any],
+) -> None:
+    mostrar_anexos_ficha(
+        ficha_id,
+        usuario,
+        f"modal_ficha_{ficha_id}",
+        expandido=True,
+    )
+
+
+def mostrar_botao_anexos_ficha(
+    ficha_id: int,
+    usuario: Dict[str, Any],
+    chave: str,
+    quantidade: int = 0,
+) -> None:
+    if st.button(
+        f"📎 Documentos e anexos ({quantidade})",
+        key=f"abrir_anexos_ficha_{chave}_{ficha_id}",
+        use_container_width=True,
+    ):
+        abrir_anexos_ficha_modal(ficha_id, usuario)
+
+
+@st.cache_data(ttl=20, show_spinner=False)
 def obter_fichas_credito(
     usuario: Dict[str, Any],
     status: str = "todas",
     busca: str = "",
     banco_filtro: Optional[str] = None,
+    limite: int = 24,
 ) -> pd.DataFrame:
     if usuario["tipo"] == "vendedor":
         filtro_acesso = "f.vendedor_id = :vendedor_id"
@@ -1344,7 +1574,8 @@ def obter_fichas_credito(
             l.placa_carro,
             l.valor_carro,
             l.telefone,
-            v.nome AS vendedor_nome
+            v.nome AS vendedor_nome,
+            COUNT(*) OVER() AS total_registros
         FROM public.fichas_credito f
         JOIN public.leads l
             ON l.id = f.lead_id
@@ -1356,13 +1587,16 @@ def obter_fichas_credito(
           AND ({filtro_busca})
           AND ({filtro_banco})
         ORDER BY f.updated_at DESC, f.id DESC
+        LIMIT :limite
         """
     )
 
+    parametros["limite"] = max(min(int(limite), 100), 1)
     with engine.connect() as conn:
         return pd.read_sql_query(query, conn, params=parametros)
 
 
+@st.cache_data(ttl=20, show_spinner=False)
 def obter_analises_banco(ficha_id: int) -> pd.DataFrame:
     query = text(
         """
@@ -1402,6 +1636,56 @@ def obter_analises_banco(ficha_id: int) -> pd.DataFrame:
         )
 
 
+@st.cache_data(ttl=20, show_spinner=False)
+def obter_analises_banco_lote(
+    ficha_ids: tuple[int, ...],
+) -> Dict[int, pd.DataFrame]:
+    if not ficha_ids:
+        return {}
+
+    ids_sql = ",".join(str(int(ficha_id)) for ficha_id in ficha_ids)
+    query = text(
+        f"""
+        SELECT
+            id,
+            ficha_id,
+            banco,
+            status,
+            valor_financiado,
+            valor_entrada,
+            parcela_48,
+            parcela_60,
+            observacao,
+            atualizado_por_id,
+            updated_at
+        FROM public.ficha_bancos
+        WHERE ficha_id IN ({ids_sql})
+        ORDER BY
+            ficha_id,
+            CASE banco
+                WHEN 'Itau' THEN 1
+                WHEN 'Bradesco' THEN 2
+                WHEN 'Santander' THEN 3
+                WHEN 'Safra' THEN 4
+                WHEN 'Creditas' THEN 5
+                WHEN 'BV' THEN 6
+                WHEN 'Pan' THEN 7
+                ELSE 99
+            END
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            dados = pd.read_sql_query(query, conn)
+        return {
+            int(ficha_id): grupo.drop(columns=["ficha_id"])
+            for ficha_id, grupo in dados.groupby("ficha_id")
+        }
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=30, show_spinner=False)
 def obter_fichas_com_valor_pendente() -> pd.DataFrame:
     query = text(
         """
@@ -1446,9 +1730,19 @@ def obter_fichas_com_valor_pendente() -> pd.DataFrame:
         return pd.read_sql_query(query, conn)
 
 
-def obter_fichas_documentais() -> pd.DataFrame:
+@st.cache_data(ttl=20, show_spinner=False)
+def obter_fichas_documentais(usuario: Dict[str, Any]) -> pd.DataFrame:
+    if usuario["tipo"] == "vendedor":
+        filtro_vendedor = "AND f.vendedor_id = :transferencia_vendedor_id"
+        parametros = {
+            "transferencia_vendedor_id": usuario.get("vendedor_id")
+        }
+    else:
+        filtro_vendedor = ""
+        parametros = {}
+
     query = text(
-        """
+        f"""
         SELECT
             f.id AS ficha_id,
             f.lead_id,
@@ -1484,6 +1778,7 @@ def obter_fichas_documentais() -> pd.DataFrame:
             OR COALESCE(l.venda_concluida, FALSE) = TRUE
             OR COALESCE(l.vendeu, FALSE) = TRUE
         )
+          {filtro_vendedor}
         ORDER BY
             CASE COALESCE(p.status, 'nao_iniciado')
                 WHEN 'em_andamento' THEN 1
@@ -1496,7 +1791,7 @@ def obter_fichas_documentais() -> pd.DataFrame:
     )
 
     with engine.connect() as conn:
-        return pd.read_sql_query(query, conn)
+        return pd.read_sql_query(query, conn, params=parametros)
 
 
 def salvar_processo_transferencia(
@@ -1555,6 +1850,7 @@ def salvar_processo_transferencia(
             )
 
         st.success("Processo de transferência atualizado.")
+        st.cache_data.clear()
         st.rerun()
     except Exception as erro:
         st.error(f"Erro ao salvar processo documental: {erro}")
@@ -1685,6 +1981,7 @@ def salvar_analise_banco(
             )
 
         st.success(f"Resultado do {banco} salvo.")
+        st.cache_data.clear()
         st.rerun()
     except Exception as erro:
         st.error(f"Erro ao salvar análise bancária: {erro}")
@@ -1814,6 +2111,7 @@ def salvar_dados_financeiros_ficha(
                 )
 
         st.success("Dados financeiros salvos.")
+        st.cache_data.clear()
         st.rerun()
     except Exception as erro:
         st.error(f"Erro ao salvar dados financeiros: {erro}")
@@ -1905,11 +2203,13 @@ def salvar_dados_cadastrais_ficha(
             )
 
         st.success("Dados cadastrais da ficha atualizados.")
+        st.cache_data.clear()
         st.rerun()
     except Exception as erro:
         st.error(f"Erro ao atualizar dados da ficha: {erro}")
 
 
+@st.cache_data(ttl=30, show_spinner=False)
 def obter_metricas_credito() -> tuple[pd.DataFrame, Dict[str, Any]]:
     query_bancos = text(
         """
@@ -2334,7 +2634,7 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
 
         if usuario_tem("view_stock"):
             if st.button(
-                "🚗 Estoque",
+                "Estoque",
                 use_container_width=True,
                 type="primary" if pagina == "estoque" else "secondary",
             ):
@@ -2352,17 +2652,22 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
                 st.session_state["abrir_formulario"] = False
                 st.rerun()
 
-        if usuario["tipo"] == "documentista":
+        if usuario_tem("view_transferencias"):
             if st.button(
                 "Processos de Transferência",
                 use_container_width=True,
                 type=(
                     "primary"
-                    if pagina in {"documentos", "leads"}
+                    if pagina in {"documentos", "transferencias"}
+                    or (
+                        usuario["tipo"] == ["documentista", "vendedor", "gerente"]
+                        and pagina == "leads"
+                    )
                     else "secondary"
                 ),
             ):
-                st.session_state["pagina_atual"] = "documentos"
+                st.session_state["pagina_atual"] = "transferencias"
+                st.session_state["abrir_formulario"] = False
                 st.rerun()
 
         if usuario_tem("view_team"):
@@ -3022,6 +3327,15 @@ def mostrar_anexos_estoque(
                     mime=mime,
                     key=f"baixar_estoque_{chave}_{anexo['id']}",
                 )
+                if usuario_tem("manage_stock") and st.button(
+                    "Excluir",
+                    key=f"excluir_estoque_anexo_{chave}_{anexo['id']}",
+                ):
+                    excluir_anexo_estoque_modal(
+                        carro_id,
+                        int(anexo["id"]),
+                        str(nome),
+                    )
 
         if usuario_tem("manage_stock"):
             novos_arquivos = st.file_uploader(
@@ -3058,6 +3372,53 @@ def mostrar_anexos_estoque(
                     st.rerun()
                 except Exception as erro:
                     st.error(f"Erro ao anexar arquivos: {erro}")
+
+
+def excluir_anexo_estoque(
+    carro_id: int,
+    anexo_id: int,
+) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                DELETE FROM public.estoque_carros_anexos
+                WHERE id = :anexo_id
+                  AND carro_id = :carro_id
+                """
+            ),
+            {
+                "anexo_id": anexo_id,
+                "carro_id": carro_id,
+            },
+        )
+
+
+@st.dialog("Excluir arquivo do estoque")
+def excluir_anexo_estoque_modal(
+    carro_id: int,
+    anexo_id: int,
+    nome_arquivo: str,
+) -> None:
+    if not usuario_tem("manage_stock"):
+        st.error("Somente gerente e documentista podem excluir arquivos.")
+        return
+
+    st.warning(
+        f"O arquivo **{nome_arquivo}** será excluído definitivamente."
+    )
+    if st.button(
+        "Excluir arquivo",
+        type="primary",
+        use_container_width=True,
+    ):
+        try:
+            excluir_anexo_estoque(carro_id, anexo_id)
+            st.cache_data.clear()
+            st.success("Arquivo excluído.")
+            st.rerun()
+        except Exception as erro:
+            st.error(f"Erro ao excluir arquivo: {erro}")
 
 
 @st.dialog("Arquivos do carro")
@@ -3550,14 +3911,23 @@ def pagina_estoque(usuario: Dict[str, Any]) -> None:
 # ============================================================
 
 def pagina_documentista(usuario: Dict[str, Any]) -> None:
-    if usuario["tipo"] not in {"documentista", "gerente"}:
-        st.error("Você não tem permissão para acessar documentos.")
+    if not usuario_tem("view_transferencias"):
+        st.error("Você não tem permissão para ver transferências.")
         return
 
     st.title("Processos de Transferência")
+    if usuario["tipo"] == "vendedor":
+        st.caption(
+            "Visualização somente das suas vendas. "
+            "Você pode adicionar documentos, mas não alterar o processo."
+        )
+    elif usuario["tipo"] in {"gerente", "documentista"}:
+        st.caption("Você pode acompanhar e atualizar todos os processos.")
+    else:
+        st.caption("Visualização dos processos de transferência.")
 
     try:
-        fichas = obter_fichas_documentais()
+        fichas = obter_fichas_documentais(usuario)
     except Exception as erro:
         st.error(
             "Execute schema_operacao_v3.sql no Supabase antes de abrir "
@@ -3568,6 +3938,9 @@ def pagina_documentista(usuario: Dict[str, Any]) -> None:
     if fichas.empty:
         st.info("Nenhum cliente vendido encontrado.")
         return
+
+    ids_fichas = tuple(int(valor) for valor in fichas["ficha_id"].tolist())
+    contagens_anexos = obter_contagem_anexos_fichas(ids_fichas)
 
     nomes_status = {
         "nao_iniciado": "Não iniciado",
@@ -3588,8 +3961,38 @@ def pagina_documentista(usuario: Dict[str, Any]) -> None:
         with st.expander(
             f"{'✅' if status_atual == 'pronto' else '⏳'} "
             f"{cliente} — {status_label}",
-            expanded=status_atual != "pronto",
+            expanded=(
+                st.session_state.get("transferencia_aberta_id")
+                == int(ficha["ficha_id"])
+            ),
         ):
+            transferencia_selecionada = (
+                st.session_state.get("transferencia_aberta_id")
+                == int(ficha["ficha_id"])
+            )
+            if not transferencia_selecionada:
+                st.caption(
+                    f"Vendedor: {ficha.get('vendedor_nome') or '-'} · "
+                    f"Venda: {formatar_data_br(ficha.get('data_compra'))}"
+                )
+                if st.button(
+                    "Abrir processo",
+                    key=f"abrir_transferencia_{ficha['ficha_id']}",
+                    use_container_width=True,
+                ):
+                    st.session_state["transferencia_aberta_id"] = int(
+                        ficha["ficha_id"]
+                    )
+                    st.rerun()
+                continue
+
+            if st.button(
+                "Fechar processo",
+                key=f"fechar_transferencia_{ficha['ficha_id']}",
+            ):
+                st.session_state.pop("transferencia_aberta_id", None)
+                st.rerun()
+
             c1, c2, c3 = st.columns(3)
             c1.write(f"**CPF:** {ficha.get('cpf') or '-'}")
             c2.write(f"**Telefone:** {ficha.get('telefone') or '-'}")
@@ -3617,42 +4020,51 @@ def pagina_documentista(usuario: Dict[str, Any]) -> None:
             st.caption(
                 f"Venda: {formatar_data_br(ficha.get('data_compra'))}"
             )
-            mostrar_anexos_ficha(
+            mostrar_botao_anexos_ficha(
                 int(ficha["ficha_id"]),
                 usuario,
                 f"documentos_{ficha['ficha_id']}",
+                contagens_anexos.get(int(ficha["ficha_id"]), 0),
             )
 
-            with st.form(f"form_transferencia_{ficha['ficha_id']}"):
-                novo_status = st.selectbox(
-                    "Situação da transferência",
-                    status_opcoes,
-                    index=(
-                        status_opcoes.index(status_atual)
-                        if status_atual in status_opcoes
-                        else 0
-                    ),
-                    format_func=lambda valor: nomes_status[valor],
-                )
-                nova_observacao = st.text_area(
-                    "Observação",
-                    value=str(ficha.get("transferencia_observacao") or ""),
-                    placeholder=(
-                        "Ex.: documento enviado ao despachante, "
-                        "aguardando assinatura..."
-                    ),
-                )
-                salvar = st.form_submit_button(
-                    "Salvar processo",
-                    use_container_width=True,
-                )
+            if usuario["tipo"] in {"gerente", "documentista"}:
+                with st.form(f"form_transferencia_{ficha['ficha_id']}"):
+                    novo_status = st.selectbox(
+                        "Situação da transferência",
+                        status_opcoes,
+                        index=(
+                            status_opcoes.index(status_atual)
+                            if status_atual in status_opcoes
+                            else 0
+                        ),
+                        format_func=lambda valor: nomes_status[valor],
+                    )
+                    nova_observacao = st.text_area(
+                        "Observação",
+                        value=str(
+                            ficha.get("transferencia_observacao") or ""
+                        ),
+                        placeholder=(
+                            "Ex.: documento enviado ao despachante, "
+                            "aguardando assinatura..."
+                        ),
+                    )
+                    salvar = st.form_submit_button(
+                        "Salvar processo",
+                        use_container_width=True,
+                    )
 
-            if salvar:
-                salvar_processo_transferencia(
-                    usuario,
-                    ficha,
-                    novo_status,
-                    nova_observacao,
+                if salvar:
+                    salvar_processo_transferencia(
+                        usuario,
+                        ficha,
+                        novo_status,
+                        nova_observacao,
+                    )
+            else:
+                st.info(
+                    f"Situação: {status_label}. "
+                    "Somente gerente e documentista podem alterar."
                 )
 
 
@@ -3913,18 +4325,66 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
         st.info("Nenhum vendedor encontrado.")
         return
 
+    lojas_por_vendedor = {}
+    try:
+        vendedores_com_loja = obter_vendedores()
+        lojas_por_vendedor = dict(
+            zip(
+                vendedores_com_loja["id"],
+                vendedores_com_loja.get("loja", "381"),
+            )
+        )
+    except Exception:
+        pass
+
     for posicao, (_, row) in enumerate(
         df.iterrows(),
         start=1,
     ):
         with st.container(border=True):
-            st.subheader(f"#{posicao} — {row['nome']}")
+            loja = normalizar_loja(
+                lojas_por_vendedor.get(row["id"], "381")
+            )
+            st.subheader(f"#{posicao} — {row['nome']} · Loja {loja}")
             col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("Leads", int(row["total_leads"]))
             col2.metric("Fichas", int(row["total_fichas"]))
             col3.metric("Aprovados", int(row["total_aprovados"]))
             col4.metric("Vendas", int(row["total_vendas"]))
             col5.metric("Pontos", int(row["pontos"] or 0))
+
+    if usuario["tipo"] == "gerente":
+        with st.expander("🏬 Administrar lojas dos usuários"):
+            usuarios = obter_usuarios_ativos()
+            if usuarios.empty:
+                st.info("Nenhum usuário ativo encontrado.")
+            else:
+                st.caption(
+                    "A alteração é aplicada ao usuário e, quando existir, "
+                    "ao vendedor vinculado."
+                )
+                for _, usuario_row in usuarios.iterrows():
+                    usuario_id = int(usuario_row["id"])
+                    loja_atual = normalizar_loja(
+                        usuario_row.get("loja", "381")
+                    )
+                    c_nome, c_loja, c_salvar = st.columns([3, 1, 1])
+                    c_nome.write(
+                        f"**{usuario_row['nome']}** "
+                        f"({normalizar_tipo(usuario_row['tipo'])})"
+                    )
+                    nova_loja = c_loja.selectbox(
+                        "Loja",
+                        LOJAS_DISPONIVEIS,
+                        index=LOJAS_DISPONIVEIS.index(loja_atual),
+                        key=f"loja_usuario_{usuario_id}",
+                        label_visibility="collapsed",
+                    )
+                    if c_salvar.button(
+                        "Salvar",
+                        key=f"salvar_loja_usuario_{usuario_id}",
+                    ):
+                        atualizar_loja_usuario(usuario_id, nova_loja)
 
 
 def pagina_fichas(usuario: Dict[str, Any]) -> None:
@@ -4141,10 +4601,29 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
             "negada": "Negadas",
         }[valor],
     )
-    busca = st.text_input(
-        "Buscar ficha",
-        placeholder="Nome, CPF, telefone ou vendedor",
+    with st.form("form_busca_fichas"):
+        busca_digitada = st.text_input(
+            "Buscar ficha",
+            placeholder="Nome, CPF, telefone ou vendedor",
+            key="busca_ficha_campo",
+        )
+        pesquisar_fichas = st.form_submit_button(
+            "Buscar",
+            use_container_width=True,
+        )
+    if pesquisar_fichas:
+        st.session_state["busca_ficha_aplicada"] = busca_digitada
+    busca = st.session_state.get("busca_ficha_aplicada", "")
+
+    filtro_fichas_chave = (
+        usuario["id"],
+        status,
+        busca.strip(),
+        st.session_state.get("banco_filtro"),
     )
+    if st.session_state.get("fichas_filtro_chave") != filtro_fichas_chave:
+        st.session_state["fichas_filtro_chave"] = filtro_fichas_chave
+        st.session_state["fichas_limite"] = 24
 
     try:
         fichas = obter_fichas_credito(
@@ -4152,6 +4631,7 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
             status,
             busca,
             st.session_state.get("banco_filtro"),
+            limite=st.session_state.get("fichas_limite", 24),
         )
     except Exception as erro:
         st.error(
@@ -4164,6 +4644,17 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
     if fichas.empty:
         st.info("Nenhuma ficha encontrada.")
         return
+
+    total_fichas = int(
+        fichas["total_registros"].iloc[0] or len(fichas)
+    )
+    st.caption(
+        f"Exibindo {len(fichas)} de {total_fichas} fichas. "
+        "Use o status, banco e busca para reduzir a lista."
+    )
+
+    ids_fichas = tuple(int(valor) for valor in fichas["id"].tolist())
+    contagens_anexos = obter_contagem_anexos_fichas(ids_fichas)
 
     for _, ficha in fichas.iterrows():
         status_label = {
@@ -4180,8 +4671,39 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
 
         with st.expander(
             f"{status_label}  |  {nome_cliente}",
-            expanded=(status == "pendente"),
+            expanded=(
+                st.session_state.get("ficha_detalhe_id")
+                == int(ficha["id"])
+            ),
         ):
+            ficha_selecionada = (
+                st.session_state.get("ficha_detalhe_id")
+                == int(ficha["id"])
+            )
+            if ficha_selecionada:
+                if st.button(
+                    "Fechar ficha",
+                    key=f"fechar_ficha_{ficha['id']}",
+                ):
+                    st.session_state.pop("ficha_detalhe_id", None)
+                    st.rerun()
+            else:
+                st.caption(
+                    f"Vendedor: {ficha.get('vendedor_nome') or '-'} · "
+                    f"Atualizada em: "
+                    f"{formatar_data_br(ficha.get('updated_at'), True)}"
+                )
+                if st.button(
+                    "Abrir ficha completa",
+                    key=f"abrir_ficha_{ficha['id']}",
+                    use_container_width=True,
+                ):
+                    st.session_state["ficha_detalhe_id"] = int(
+                        ficha["id"]
+                    )
+                    st.rerun()
+                continue
+
             col_cliente_1, col_cliente_2, col_cliente_3 = st.columns(3)
             col_cliente_1.write(f"**Vendedor:** {ficha.get('vendedor_nome') or '-'}")
             col_cliente_2.write(f"**CPF:** {ficha.get('cpf') or '-'}")
@@ -4284,10 +4806,11 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                             nova_entrada_ficha,
                         )
 
-            mostrar_anexos_ficha(
+            mostrar_botao_anexos_ficha(
                 int(ficha["id"]),
                 usuario,
                 f"ficha_{ficha['id']}",
+                contagens_anexos.get(int(ficha["id"]), 0),
             )
 
             st.markdown("### Resultado nos bancos")
@@ -4611,6 +5134,19 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                         f"por {inteiro_seguro(ficha.get('boleto_meses'), 0)} meses"
                     )
 
+    limite_fichas = st.session_state.get("fichas_limite", 24)
+    if len(fichas) < total_fichas and limite_fichas < 100:
+        if st.button(
+            "Carregar mais 24 fichas",
+            key="carregar_mais_fichas",
+            use_container_width=True,
+        ):
+            st.session_state["fichas_limite"] = min(
+                limite_fichas + 24,
+                100,
+            )
+            st.rerun()
+
 
 def pagina_elfen_ai() -> None:
     if not usuario_tem("use_elfen_ai"):
@@ -4674,7 +5210,7 @@ def obter_chat_geral() -> pd.DataFrame:
             m.tipo,
             m.arquivo_nome,
             m.arquivo_mime,
-            m.arquivo_bytes,
+            (m.arquivo_bytes IS NOT NULL) AS tem_anexo,
             m.created_at,
             u.nome AS nome_remetente,
             COUNT(r.id) FILTER (WHERE r.reacao = '👍')
@@ -4687,11 +5223,72 @@ def obter_chat_geral() -> pd.DataFrame:
         GROUP BY
             m.id,
             u.nome
-        ORDER BY m.created_at ASC
+        ORDER BY m.created_at DESC
+        LIMIT 100
         """
     )
     with engine.connect() as conn:
-        return pd.read_sql_query(query, conn)
+        mensagens = pd.read_sql_query(query, conn)
+    if mensagens.empty:
+        return mensagens
+    return mensagens.sort_values(
+        "created_at",
+        ascending=True,
+    ).reset_index(drop=True)
+
+
+def obter_anexo_chat(mensagem_id: int) -> Optional[Dict[str, Any]]:
+    query = text(
+        """
+        SELECT
+            id,
+            remetente_id,
+            mensagem,
+            arquivo_nome,
+            arquivo_mime,
+            arquivo_bytes
+        FROM public.chat_geral_mensagens
+        WHERE id = :mensagem_id
+          AND arquivo_bytes IS NOT NULL
+        """
+    )
+    with engine.connect() as conn:
+        resultado = conn.execute(
+            query,
+            {"mensagem_id": mensagem_id},
+        ).mappings().first()
+    return dict(resultado) if resultado else None
+
+
+@st.dialog("Anexo do chat")
+def abrir_anexo_chat_modal(
+    mensagem_id: int,
+    nome_arquivo: str,
+) -> None:
+    try:
+        anexo = obter_anexo_chat(mensagem_id)
+    except Exception as erro:
+        st.error(f"Erro ao carregar anexo: {erro}")
+        return
+
+    if not anexo:
+        st.info("Este anexo não está mais disponível.")
+        return
+
+    conteudo = anexo["arquivo_bytes"]
+    mime = anexo.get("arquivo_mime") or "application/octet-stream"
+    if str(mime).startswith("image/"):
+        st.image(conteudo)
+    elif str(mime).startswith("audio/"):
+        st.audio(conteudo, format=mime)
+    st.download_button(
+        "Baixar anexo",
+        data=conteudo,
+        file_name=nome_arquivo or "anexo",
+        mime=mime,
+        key=f"download_chat_modal_{mensagem_id}",
+        use_container_width=True,
+    )
 
 
 def alternar_reacao_chat(
@@ -4822,6 +5419,60 @@ def salvar_mensagem_chat_geral(
         )
 
 
+def excluir_anexo_chat(
+    mensagem_id: int,
+) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE public.chat_geral_mensagens
+                SET arquivo_nome = NULL,
+                    arquivo_mime = NULL,
+                    arquivo_bytes = NULL,
+                    tipo = CASE
+                        WHEN mensagem IS NULL THEN 'texto'
+                        ELSE 'texto'
+                    END
+                WHERE id = :mensagem_id
+                """
+            ),
+            {"mensagem_id": mensagem_id},
+        )
+
+
+@st.dialog("Excluir anexo do chat")
+def excluir_anexo_chat_modal(
+    mensagem_id: int,
+    remetente_id: int,
+    nome_arquivo: str,
+) -> None:
+    usuario = st.session_state["usuario_logado"]
+    pode_excluir = (
+        int(usuario["id"]) == int(remetente_id)
+        or usuario_tem("view_documents")
+    )
+    if not pode_excluir:
+        st.error("Você só pode excluir anexos enviados por você.")
+        return
+
+    st.warning(
+        f"O anexo **{nome_arquivo}** será removido definitivamente. "
+        "A mensagem de texto, se existir, será preservada."
+    )
+    if st.button(
+        "Excluir anexo",
+        type="primary",
+        use_container_width=True,
+    ):
+        try:
+            excluir_anexo_chat(mensagem_id)
+            st.success("Anexo removido.")
+            st.rerun()
+        except Exception as erro:
+            st.error(f"Erro ao excluir anexo: {erro}")
+
+
 def pagina_chat(usuario: Dict[str, Any]) -> None:
     if not usuario_tem("use_chat"):
         st.error("Você não tem permissão para acessar o chat.")
@@ -4857,26 +5508,34 @@ def pagina_chat(usuario: Dict[str, Any]) -> None:
                     if mensagem.get("mensagem"):
                         st.write(mensagem["mensagem"])
 
-                    arquivo_bytes = mensagem.get("arquivo_bytes")
-                    if pd.notna(arquivo_bytes) and arquivo_bytes:
-                        mime = (
-                            mensagem.get("arquivo_mime")
-                            or "application/octet-stream"
+                    if mensagem.get("tem_anexo"):
+                        nome_anexo = (
+                            mensagem.get("arquivo_nome") or "anexo"
                         )
-                        if str(mime).startswith("image/"):
-                            st.image(arquivo_bytes)
-                        elif str(mime).startswith("audio/"):
-                            st.audio(arquivo_bytes, format=mime)
-                        st.download_button(
-                            "Baixar anexo",
-                            data=arquivo_bytes,
-                            file_name=(
-                                mensagem.get("arquivo_nome")
-                                or "anexo"
-                            ),
-                            mime=mime,
-                            key=f"download_chat_{mensagem['id']}",
-                        )
+                        if st.button(
+                            f"📎 Abrir {nome_anexo}",
+                            key=f"abrir_chat_{mensagem['id']}",
+                        ):
+                            abrir_anexo_chat_modal(
+                                int(mensagem["id"]),
+                                str(nome_anexo),
+                            )
+                        if (
+                            int(mensagem["remetente_id"])
+                            == int(usuario_id)
+                            or usuario_tem("view_documents")
+                        ) and st.button(
+                            "Excluir anexo",
+                            key=f"excluir_chat_{mensagem['id']}",
+                        ):
+                            excluir_anexo_chat_modal(
+                                int(mensagem["id"]),
+                                int(mensagem["remetente_id"]),
+                                str(
+                                    mensagem.get("arquivo_nome")
+                                    or "anexo"
+                                ),
+                            )
 
                     if st.button(
                         f"👍 {int(mensagem.get('reacoes_like') or 0)}",
@@ -5540,8 +6199,8 @@ paginas_permitidas = {"leads"}
 if usuario_tem("view_stock"):
     paginas_permitidas.add("estoque")
 
-if usuario_atual["tipo"] == "documentista":
-    paginas_permitidas.add("documentos")
+if usuario_tem("view_transferencias"):
+    paginas_permitidas.add("transferencias")
 
 if usuario_tem("view_team"):
     paginas_permitidas.add("vendedores")
@@ -5575,7 +6234,7 @@ elif pagina_atual == "leads":
         pagina_documentista(usuario_atual)
     else:
         pagina_leads(usuario_atual)
-elif pagina_atual == "documentos":
+elif pagina_atual in {"documentos", "transferencias"}:
     pagina_documentista(usuario_atual)
 elif pagina_atual == "vendedores":
     pagina_vendedores(usuario_atual)
