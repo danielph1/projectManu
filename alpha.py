@@ -296,6 +296,10 @@ def limpar_sessao():
         "chat_vendedor_selecionado",
         "abrir_formulario",
         "filtro_vendedor_id",
+        "busca_lead_campo",
+        "busca_lead_aplicada",
+        "busca_estoque_campo",
+        "busca_estoque_aplicada",
     ]
 
     for chave in chaves_para_limpar:
@@ -313,6 +317,10 @@ def inicializar_sessao():
         "abrir_formulario": False,
         "banco_filtro": None,
         "filtro_vendedor_id": None,
+        "leads_limite": 24,
+        "leads_filtro_chave": None,
+        "busca_lead_aplicada": "",
+        "busca_estoque_aplicada": "",
     }
 
     for chave, valor in defaults.items():
@@ -396,6 +404,7 @@ def pode_deletar_lead(lead: pd.Series, usuario: Dict[str, Any]) -> bool:
 # CONSULTAS AUXILIARES
 # ============================================================
 
+@st.cache_data(ttl=60, show_spinner=False)
 def obter_vendedores() -> pd.DataFrame:
     try:
         query = text(
@@ -435,6 +444,7 @@ def obter_vendedores() -> pd.DataFrame:
             return pd.DataFrame(columns=["id", "nome", "foto_url"])
 
 
+@st.cache_data(ttl=15, show_spinner=False)
 def obter_metricas(
     usuario: Dict[str, Any],
     vendedor_filtro: Optional[int] = None,
@@ -499,6 +509,7 @@ def obter_metricas(
         }
 
 
+@st.cache_data(ttl=15, show_spinner=False)
 def buscar_leads(
     usuario: Dict[str, Any],
     categoria: str,
@@ -506,6 +517,7 @@ def buscar_leads(
     vendedor_filtro: Optional[int] = None,
     data_inicio: Optional[date] = None,
     data_fim: Optional[date] = None,
+    limite: int = 60,
 ) -> pd.DataFrame:
     escopo, parametros = escopo_leads(usuario)
     filtros = [escopo]
@@ -576,15 +588,18 @@ def buscar_leads(
             l.valor_entrada,
             l.updated_at,
             l.vendedor_id,
-            v.nome AS nome_vendedor
+            v.nome AS nome_vendedor,
+            COUNT(*) OVER() AS total_registros
         FROM public.leads l
         LEFT JOIN public.vendedores v
             ON v.id = l.vendedor_id
         WHERE {" AND ".join(f"({filtro})" for filtro in filtros)}
         ORDER BY l.updated_at DESC NULLS LAST, l.id DESC
+        LIMIT :limite
         """
     )
 
+    parametros["limite"] = max(min(int(limite), 200), 1)
     with engine.connect() as conn:
         return pd.read_sql_query(query, conn, params=parametros)
 
@@ -661,6 +676,7 @@ def obter_usuarios_ativos() -> pd.DataFrame:
         return pd.read_sql_query(query, conn)
 
 
+@st.cache_data(ttl=20, show_spinner=False)
 def contar_tarefas_nao_visualizadas(usuario_id: int) -> int:
     query = text(
         """
@@ -830,6 +846,7 @@ BANCOS_CREDITO = [
 ]
 
 
+@st.cache_data(ttl=20, show_spinner=False)
 def contar_notificacoes_nao_lidas(usuario_id: int) -> int:
     query = text(
         """
@@ -2317,7 +2334,7 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
 
         if usuario_tem("view_stock"):
             if st.button(
-                "Estoque",
+                "🚗 Estoque",
                 use_container_width=True,
                 type="primary" if pagina == "estoque" else "secondary",
             ):
@@ -2802,6 +2819,7 @@ def mostrar_card_lead(
             )
 
 
+@st.cache_data(ttl=30, show_spinner=False)
 def obter_estoque_carros(busca: str = "") -> pd.DataFrame:
     filtros = ["COALESCE(ativo, TRUE) = TRUE"]
     parametros: Dict[str, Any] = {}
@@ -2906,6 +2924,7 @@ def salvar_anexos_estoque(
         )
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def obter_anexos_estoque(carro_id: int) -> pd.DataFrame:
     query = text(
         """
@@ -2931,10 +2950,38 @@ def obter_anexos_estoque(carro_id: int) -> pd.DataFrame:
         )
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def obter_contagem_anexos_estoque(
+    carro_ids: tuple[int, ...],
+) -> Dict[int, int]:
+    if not carro_ids:
+        return {}
+
+    ids_sql = ",".join(str(int(carro_id)) for carro_id in carro_ids)
+    query = text(
+        f"""
+        SELECT carro_id, COUNT(*) AS total
+        FROM public.estoque_carros_anexos
+        WHERE carro_id IN ({ids_sql})
+        GROUP BY carro_id
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            resultado = conn.execute(query).mappings().all()
+        return {
+            int(item["carro_id"]): int(item["total"] or 0)
+            for item in resultado
+        }
+    except Exception:
+        return {}
+
+
 def mostrar_anexos_estoque(
     carro_id: int,
     usuario: Dict[str, Any],
     chave: str,
+    expandido: bool = False,
 ) -> None:
     try:
         anexos = obter_anexos_estoque(carro_id)
@@ -2947,7 +2994,7 @@ def mostrar_anexos_estoque(
 
     with st.expander(
         f"📎 Arquivos do carro ({len(anexos)})",
-        expanded=False,
+        expanded=expandido,
     ):
         if anexos.empty:
             st.caption("Nenhum arquivo anexado.")
@@ -3006,10 +3053,24 @@ def mostrar_anexos_estoque(
                             usuario["id"],
                             novos_arquivos,
                         )
+                    st.cache_data.clear()
                     st.success("Arquivos anexados ao carro.")
                     st.rerun()
                 except Exception as erro:
                     st.error(f"Erro ao anexar arquivos: {erro}")
+
+
+@st.dialog("Arquivos do carro")
+def abrir_anexos_estoque_modal(
+    carro_id: int,
+    usuario: Dict[str, Any],
+) -> None:
+    mostrar_anexos_estoque(
+        carro_id,
+        usuario,
+        f"modal_{carro_id}",
+        expandido=True,
+    )
 
 
 @st.dialog("Editar carro do estoque")
@@ -3143,6 +3204,7 @@ def editar_carro_estoque_modal(carro_data: pd.Series) -> None:
                     "id": int(carro_data["id"]),
                 },
             )
+        st.cache_data.clear()
         st.success("Carro atualizado.")
         st.rerun()
     except Exception as erro:
@@ -3191,6 +3253,7 @@ def excluir_carro_estoque_modal(carro_data: pd.Series) -> None:
                     ),
                     {"id": int(carro_data["id"])},
                 )
+            st.cache_data.clear()
             st.success("Carro retirado do estoque.")
             st.rerun()
         except Exception as erro:
@@ -3201,6 +3264,7 @@ def mostrar_card_estoque(
     carro_data: pd.Series,
     usuario: Dict[str, Any],
     chave: str,
+    quantidade_anexos: int = 0,
 ) -> None:
     with st.container(border=True):
         titulo = " ".join(
@@ -3233,11 +3297,15 @@ def mostrar_card_estoque(
         if carro_data.get("leilao"):
             st.info("Este veículo é de leilão.")
 
-        mostrar_anexos_estoque(
-            int(carro_data["id"]),
-            usuario,
-            f"{chave}_carro_{carro_data['id']}",
-        )
+        if st.button(
+            f"📎 Arquivos ({quantidade_anexos})",
+            key=f"abrir_anexos_estoque_{chave}_{carro_data['id']}",
+            use_container_width=True,
+        ):
+            abrir_anexos_estoque_modal(
+                int(carro_data["id"]),
+                usuario,
+            )
 
         if usuario_tem("manage_stock"):
             col_editar, col_excluir = st.columns(2)
@@ -3266,6 +3334,9 @@ def mostrar_lista_estoque(
         st.info("Nenhum carro encontrado.")
         return
 
+    ids_carros = tuple(int(valor) for valor in estoque["id"].tolist())
+    contagens_anexos = obter_contagem_anexos_estoque(ids_carros)
+
     grupos: Dict[str, list] = {}
     for _, carro in estoque.iterrows():
         marca = str(carro.get("marca") or "Sem marca").strip()
@@ -3276,7 +3347,7 @@ def mostrar_lista_estoque(
     ):
         carros = grupos[marca]
         with st.expander(
-            f"{marca} ({len(carros)})",
+            f"🚘 {marca} ({len(carros)})",
             expanded=False,
         ):
             for carro in carros:
@@ -3284,6 +3355,7 @@ def mostrar_lista_estoque(
                     carro,
                     usuario,
                     chave,
+                    contagens_anexos.get(int(carro["id"]), 0),
                 )
 
 
@@ -3422,6 +3494,7 @@ def pagina_estoque(usuario: Dict[str, Any]) -> None:
                                 usuario["id"],
                                 anexos,
                             )
+                        st.cache_data.clear()
                         st.success("Carro cadastrado no estoque.")
                         st.rerun()
                     except Exception as erro:
@@ -3446,19 +3519,30 @@ def pagina_estoque(usuario: Dict[str, Any]) -> None:
             )
 
     with aba_pesquisa:
-        busca = st.text_input(
-            "Pesquisar no estoque",
-            placeholder="Placa, cor, modelo, marca ou ano",
-            key="busca_estoque",
-        )
-        try:
-            mostrar_lista_estoque(
-                obter_estoque_carros(busca),
-                usuario,
-                "pesquisa_estoque",
+        with st.form("form_pesquisa_estoque"):
+            busca_digitada = st.text_input(
+                "Pesquisar no estoque",
+                placeholder="Placa, cor, modelo, marca ou ano",
+                key="busca_estoque_campo",
             )
-        except Exception as erro:
-            st.error(f"Erro ao pesquisar estoque: {erro}")
+            pesquisar_estoque = st.form_submit_button(
+                "Pesquisar",
+                use_container_width=True,
+            )
+        if pesquisar_estoque:
+            st.session_state["busca_estoque_aplicada"] = busca_digitada
+        busca = st.session_state.get("busca_estoque_aplicada", "")
+        if not busca.strip():
+            st.info("Digite uma placa, cor, modelo, marca ou ano para pesquisar.")
+        else:
+            try:
+                mostrar_lista_estoque(
+                    obter_estoque_carros(busca),
+                    usuario,
+                    "pesquisa_estoque",
+                )
+            except Exception as erro:
+                st.error(f"Erro ao pesquisar estoque: {erro}")
 
 
 # ============================================================
@@ -3594,9 +3678,9 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
         horizontal=True,
         format_func=lambda valor: {
             "todos": "Todos",
-            "responderam": "Responderam",
             "fichas": "Fichas",
             "aprovados": "Aprovados",
+            "responderam": "Responderam",
             "nao_responderam": "Não responderam",
             "vendidos": "Vendidos",
         }[valor],
@@ -3683,9 +3767,9 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
     )
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Total de leads", metricas["total_leads"])
-    c2.metric("Responderam", metricas["total_responderam"])
-    c3.metric("Fichas geradas", metricas["total_fichas"])
-    c4.metric("Aprovados", metricas["total_aprovados"])
+    c2.metric("Fichas geradas", metricas["total_fichas"])
+    c3.metric("Aprovados", metricas["total_aprovados"])
+    c4.metric("Responderam", metricas["total_responderam"])
     c5.metric("Vendidos", metricas["total_vendidos"])
 
     if st.session_state.get("abrir_formulario"):
@@ -3695,11 +3779,33 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
         )
 
     st.markdown("---")
-    busca = st.text_input(
-        "Buscar lead",
-        placeholder="Nome, CPF, telefone ou observação",
-    )
+    with st.form("form_busca_leads"):
+        busca_digitada = st.text_input(
+            "Buscar lead",
+            placeholder="Nome, CPF, telefone ou observação",
+            key="busca_lead_campo",
+        )
+        pesquisar_leads = st.form_submit_button(
+            "Buscar",
+            use_container_width=True,
+        )
+    if pesquisar_leads:
+        st.session_state["busca_lead_aplicada"] = busca_digitada
+    busca = st.session_state.get("busca_lead_aplicada", "")
 
+    filtro_chave = (
+        usuario["id"],
+        filtro,
+        busca.strip(),
+        vendedor_filtro,
+        data_inicio,
+        data_fim,
+    )
+    if st.session_state.get("leads_filtro_chave") != filtro_chave:
+        st.session_state["leads_filtro_chave"] = filtro_chave
+        st.session_state["leads_limite"] = 24
+
+    limite_leads = st.session_state.get("leads_limite", 24)
     try:
         df = buscar_leads(
             usuario,
@@ -3708,6 +3814,7 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
             vendedor_filtro=vendedor_filtro,
             data_inicio=data_inicio,
             data_fim=data_fim,
+            limite=limite_leads,
         )
     except Exception as erro:
         st.error(f"Erro ao carregar leads: {erro}")
@@ -3719,10 +3826,28 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
         st.info("Nenhum lead encontrado para este perfil e filtro.")
         return
 
+    total_leads = int(df["total_registros"].iloc[0] or len(df))
+    st.caption(
+        f"Exibindo {len(df)} de {total_leads} leads. "
+        "Use a busca e os filtros para encontrar um registro mais rápido."
+    )
+
     colunas = st.columns(3)
     for indice, (_, row) in enumerate(df.iterrows()):
         with colunas[indice % 3]:
             mostrar_card_lead(row, usuario, df_vendedores)
+
+    if len(df) < total_leads and limite_leads < 200:
+        if st.button(
+            "Carregar mais 24 leads",
+            key="carregar_mais_leads",
+            use_container_width=True,
+        ):
+            st.session_state["leads_limite"] = min(
+                limite_leads + 24,
+                200,
+            )
+            st.rerun()
 
 
 def pagina_vendedores(usuario: Dict[str, Any]) -> None:
@@ -3733,8 +3858,8 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
     st.title("Equipe de Vendedores")
     st.caption(
         "Ranking calculado automaticamente: "
-        "lead = 1 pontos, ficha gerada = 0.5, "
-        "aprovação = 1.5 e venda = 3."
+        "lead = 100 pontos, ficha gerada = 50, "
+        "aprovação = 150 e venda = 300."
     )
 
     query = text(
@@ -3753,19 +3878,19 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
                 WHERE l.venda_concluida = TRUE OR l.vendeu = TRUE
             ) AS total_vendas,
             SUM(
-                CASE WHEN l.id IS NOT NULL THEN 1 ELSE 0 END
+                CASE WHEN l.id IS NOT NULL THEN 100 ELSE 0 END
                 + CASE
                     WHEN COALESCE(l.gerou_ficha, FALSE) = TRUE
-                    THEN 0.5 ELSE 0
+                    THEN 50 ELSE 0
                   END
                 + CASE
                     WHEN COALESCE(l.aprovou_credito, FALSE) = TRUE
-                    THEN 1.5 ELSE 0
+                    THEN 150 ELSE 0
                   END
                 + CASE
                     WHEN COALESCE(l.venda_concluida, FALSE) = TRUE
                       OR COALESCE(l.vendeu, FALSE) = TRUE
-                    THEN 3 ELSE 0
+                    THEN 300 ELSE 0
                   END
             ) AS pontos
         FROM public.vendedores v
@@ -3836,16 +3961,16 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                 int(geral.get("total_fichas") or 0),
             )
             metricas[1].metric(
-                "Pendentes",
-                int(geral.get("fichas_pendentes") or 0),
-            )
-            metricas[2].metric(
                 "Aprovadas",
                 int(geral.get("fichas_aprovadas") or 0),
             )
-            metricas[3].metric(
+            metricas[2].metric(
                 "Negadas",
                 int(geral.get("fichas_negadas") or 0),
+            )
+            metricas[3].metric(
+                "Pendentes",
+                int(geral.get("fichas_pendentes") or 0),
             )
             metricas[4].metric(
                 "Compras",
@@ -4495,6 +4620,7 @@ def pagina_elfen_ai() -> None:
     pagina_fichas(st.session_state["usuario_logado"])
 
 
+@st.cache_data(ttl=20, show_spinner=False)
 def contar_chat_geral_nao_lidas(usuario_id: int) -> int:
     query = text(
         """
