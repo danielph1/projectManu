@@ -20,7 +20,7 @@ engine = create_engine(DB_URL)
 MARCAS_CONHECIDAS = [
 "AUDI", "BMW", "CHEVROLET", "CITROEN", "CITROËN", "FIAT", "FORD",
     "HONDA", "HYUNDAI", "JEEP", "KIA", "MERCEDES", "MERCEDES-BENZ",
-    "NISSAN", "PEUGEOT", "RENAULT", "TOYOTA", "VOLKSWAGEN", "VW", "VOLKS", "VOLVO"
+    "NISSAN", "PEUGEOT", "RENAULT", "TOYOTA", "VOLKSWAGEN", "VW", "VOLKS", "VOLVO", "MOTOS OKM"
 ]
 
 def limpar_texto(valor):
