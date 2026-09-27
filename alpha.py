@@ -11,28 +11,64 @@ from sqlalchemy import create_engine, text
 
 cookie_manager = CookieManager()
 
+from datetime import datetime, timedelta
+
 def salvar_sessao(usuario: dict, dias: int = 30):
     """Salva o usuário logado no cookie"""
+    # Garante que todos os valores sejam serializáveis
+    dados = {
+        "id": int(usuario["id"]) if usuario.get("id") is not None else None,
+        "nome": str(usuario.get("nome") or ""),
+        "login": str(usuario.get("login") or ""),
+        "tipo": str(usuario.get("tipo") or ""),
+        "tipo_original": str(usuario.get("tipo_original") or ""),
+        "vendedor_id": int(usuario["vendedor_id"]) if usuario.get("vendedor_id") is not None else None,
+        "loja": str(usuario.get("loja") or "381"),
+        "is_admin": bool(usuario.get("is_admin", False)),
+    }
+
     cookie_manager.set(
         "usuario_logado",
-        {
-            "id": usuario["id"],
-            "nome": usuario["nome"],
-            "login": usuario["login"],
-            "tipo": usuario["tipo"],
-            "vendedor_id": usuario.get("vendedor_id")
-        },
-        expires_at=time.time() + (dias * 24 * 60 * 60)
+        dados,
+        expires_at=datetime.now() + timedelta(days=dias)   # ← datetime, não float
     )
 
 def carregar_sessao():
     """Tenta carregar o usuário do cookie"""
-    return cookie_manager.get("usuario_logado")
+    try:
+        return cookie_manager.get("usuario_logado")
+    except Exception:
+        return None
 
 def limpar_sessao():
-    """Remove o cookie (logout)"""
-    cookie_manager.delete("usuario_logado")
+    try:
+        cookie_manager.delete("usuario_logado")
+    except Exception:
+        pass
 
+    chaves_para_limpar = [
+        "usuario_logado",
+        "filtro_categoria",
+        "pagina_atual",
+        "chat_vendedor_selecionado",
+        "abrir_formulario",
+        "filtro_vendedor_id",
+        "busca_lead_campo",
+        "busca_lead_aplicada",
+        "busca_estoque_campo",
+        "busca_estoque_aplicada",
+        "busca_ficha_campo",
+        "busca_ficha_aplicada",
+        "fichas_limite",
+        "fichas_filtro_chave",
+        "ficha_detalhe_id",
+        "transferencia_aberta_id",
+    ]
+
+    for chave in chaves_para_limpar:
+        st.session_state.pop(chave, None)
+
+    st.rerun()
 # ============================================================
 # CONFIGURAÇÃO
 # ============================================================
