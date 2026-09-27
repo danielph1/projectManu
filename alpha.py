@@ -4073,10 +4073,10 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
 
     filtros = [
         "todos",
-        "fichas",
-        "aprovados",
         "responderam",
         "nao_responderam",
+        "fichas",
+        "aprovados",
         "vendidos",
     ]
     filtro_atual = st.session_state["filtro_categoria"]
@@ -4090,10 +4090,10 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
         horizontal=True,
         format_func=lambda valor: {
             "todos": "Todos",
-            "fichas": "Fichas",
-            "aprovados": "Aprovados",
             "responderam": "Responderam",
             "nao_responderam": "Não responderam",
+            "fichas": "Fichas",
+            "aprovados": "Aprovados",
             "vendidos": "Vendidos",
         }[valor],
     )
