@@ -3,4 +3,4 @@ pandas
 psycopg[binary]
 sqlalchemy
 requests
-CookieManager
+extra_streamlit_components
