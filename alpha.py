@@ -4179,9 +4179,9 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
     )
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Total de leads", metricas["total_leads"])
-    c2.metric("Fichas geradas", metricas["total_fichas"])
-    c3.metric("Aprovados", metricas["total_aprovados"])
-    c4.metric("Responderam", metricas["total_responderam"])
+    c2.metric("Responderam", metricas["total_responderam"])
+    c3.metric("Fichas geradas", metricas["total_fichas"])
+    c4.metric("Aprovados", metricas["total_aprovados"])
     c5.metric("Vendidos", metricas["total_vendidos"])
 
     if st.session_state.get("abrir_formulario"):
