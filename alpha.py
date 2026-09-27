@@ -3,11 +3,35 @@ import hmac
 import secrets
 from datetime import date, timedelta
 from typing import Any, Dict, Optional, Set
-
+from extra_streamlit_components import CookieManager
+import time
 import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
 
+cookie_manager = CookieManager()
+
+def salvar_sessao(usuario: dict, dias: int = 30):
+    """Salva o usuário logado no cookie"""
+    cookie_manager.set(
+        "usuario_logado",
+        {
+            "id": usuario["id"],
+            "nome": usuario["nome"],
+            "login": usuario["login"],
+            "tipo": usuario["tipo"],
+            "vendedor_id": usuario.get("vendedor_id")
+        },
+        expires_at=time.time() + (dias * 24 * 60 * 60)
+    )
+
+def carregar_sessao():
+    """Tenta carregar o usuário do cookie"""
+    return cookie_manager.get("usuario_logado")
+
+def limpar_sessao():
+    """Remove o cookie (logout)"""
+    cookie_manager.delete("usuario_logado")
 
 # ============================================================
 # CONFIGURAÇÃO
@@ -165,15 +189,6 @@ engine = get_engine()
 # SENHAS
 # ============================================================
 #
-# A sua tabela atual chama a coluna de senha_hash, mas os valores
-# exibidos na imagem parecem estar em texto puro ("123456").
-#
-# Esta implementação:
-# 1. aceita temporariamente a senha antiga;
-# 2. depois de um login correto, troca automaticamente por PBKDF2;
-# 3. nunca grava a senha nova em texto puro.
-#
-# O ideal, em uma próxima etapa, é migrar para Supabase Auth.
 
 PBKDF2_ITERATIONS = 310_000
 PASSWORD_PREFIX = "pbkdf2_sha256"
@@ -318,6 +333,8 @@ def autenticar(login_input: str, senha_input: str) -> bool:
             "is_admin": tipo == "gerente",
         }
 
+        salvar_sessao(st.session_state["usuario_logado"])
+
         return True
 
     except Exception as erro:
@@ -326,6 +343,12 @@ def autenticar(login_input: str, senha_input: str) -> bool:
 
 
 def limpar_sessao():
+    # Limpa o cookie
+    try:
+        cookie_manager.delete("usuario_logado")
+    except Exception:
+        pass
+
     chaves_para_limpar = [
         "usuario_logado",
         "filtro_categoria",
@@ -372,6 +395,11 @@ def inicializar_sessao():
     for chave, valor in defaults.items():
         if chave not in st.session_state:
             st.session_state[chave] = valor
+
+    if st.session_state.get("usuario_logado") is None:
+            usuario_cookie = carregar_sessao()
+            if usuario_cookie:
+                st.session_state["usuario_logado"] = usuario_cookie
 
 
 inicializar_sessao()
