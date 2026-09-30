@@ -74,7 +74,7 @@ def limpar_sessao():
 # ============================================================
 
 st.set_page_config(
-    page_title="CRM - Gestão de Leads",
+    page_title="Manu Automoveis",
     page_icon="📊",
     layout="wide",
 )
