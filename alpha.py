@@ -2717,12 +2717,12 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
                 st.rerun()
 
         if pagina == "leads" and usuario_tem("create_lead"):
-            st.markdown("---")
             if st.button(
                 "➕ Adicionar novo lead",
                 use_container_width=True,
                 key="btn_adicionar_novo_lead",
             ):
+            st.markdown("---")
                 st.session_state["abrir_formulario"] = True
                 st.rerun()
 
