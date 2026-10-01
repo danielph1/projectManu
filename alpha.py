@@ -2822,15 +2822,6 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
                 st.session_state["pagina_atual"] = "elfen_ai"
                 st.rerun()
 
-        if pagina == "leads" and usuario_tem("create_lead"):
-            st.markdown("---")
-            if st.button(
-                "➕ Adicionar novo lead",
-                use_container_width=True,
-            ):
-                st.session_state["abrir_formulario"] = True
-                st.rerun()
-
 
 def mostrar_formulario_novo_lead(
     usuario: Dict[str, Any],
@@ -4265,6 +4256,7 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
         )
 
     st.markdown("---")
+
     with st.form("form_busca_leads"):
         busca_digitada = st.text_input(
             "Buscar lead",
