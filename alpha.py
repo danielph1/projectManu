@@ -2691,15 +2691,6 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
         if st.button("Sair", use_container_width=True):
             limpar_sessao()
 
-        if pagina == "leads" and usuario_tem("create_lead"):
-            st.markdown("---")
-            if st.button(
-                "➕ Adicionar novo lead",
-                use_container_width=True,
-            ):
-                st.session_state["abrir_formulario"] = True
-                st.rerun()
-
         st.markdown("---")
         st.header("Navegação")
 
@@ -2723,6 +2714,15 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
             ):
                 st.session_state["pagina_atual"] = "leads"
                 st.session_state["abrir_formulario"] = False
+                st.rerun()
+
+        if pagina == "leads" and usuario_tem("create_lead"):
+            st.markdown("---")
+            if st.button(
+                "➕ Adicionar novo lead",
+                use_container_width=True,
+            ):
+                st.session_state["abrir_formulario"] = True
                 st.rerun()
 
         if usuario_tem("view_transferencias"):
@@ -2819,6 +2819,15 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
                 type="primary" if pagina == "elfen_ai" else "secondary",
             ):
                 st.session_state["pagina_atual"] = "elfen_ai"
+                st.rerun()
+
+        if pagina == "leads" and usuario_tem("create_lead"):
+            st.markdown("---")
+            if st.button(
+                "➕ Adicionar novo lead",
+                use_container_width=True,
+            ):
+                st.session_state["abrir_formulario"] = True
                 st.rerun()
 
 
