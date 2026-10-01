@@ -2722,7 +2722,7 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
                 use_container_width=True,
                 key="btn_adicionar_novo_lead",
             ):
-            st.markdown("---")
+                st.markdown("---")
                 st.session_state["abrir_formulario"] = True
                 st.rerun()
 
