@@ -2721,6 +2721,7 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
             if st.button(
                 "➕ Adicionar novo lead",
                 use_container_width=True,
+                key="btn_adicionar_novo_lead",
             ):
                 st.session_state["abrir_formulario"] = True
                 st.rerun()
