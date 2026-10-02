@@ -1017,13 +1017,36 @@ def converter_data_opcional(valor: Any) -> Optional[date]:
     if not texto:
         return None
 
+    # Ano com dois dígitos: 30–99 => 1930–1999; 00–29 => 2000–2029.
+    # Assim, por exemplo, 15/04/50 é interpretado como 15/04/1950.
+    partes_data = None
+    for separador in ("/", "-"):
+        partes = texto.split(separador)
+        if (
+            len(partes) == 3
+            and all(parte.isdigit() for parte in partes)
+            and len(partes[0]) <= 2
+            and len(partes[1]) <= 2
+            and len(partes[2]) == 2
+        ):
+            partes_data = partes
+            break
+    if partes_data is None and texto.isdigit() and len(texto) == 6:
+        partes_data = [texto[:2], texto[2:4], texto[4:]]
+
+    if partes_data is not None:
+        dia, mes, ano_curto = (int(parte) for parte in partes_data)
+        ano = 1900 + ano_curto if ano_curto >= 30 else 2000 + ano_curto
+        try:
+            return date(ano, mes, dia)
+        except ValueError:
+            return None
+
     for formato in (
         "%d/%m/%Y",
-        "%d/%m/%y",
         "%d-%m-%Y",
         "%Y-%m-%d",
         "%d%m%Y",
-        "%d%m%y",
     ):
         try:
             return datetime.strptime(texto, formato).date()
@@ -2277,7 +2300,7 @@ def salvar_dados_cadastrais_ficha(
     ficha: pd.Series,
     nome_completo: str,
     cpf: str,
-    data_nascimento: Optional[date],
+    data_nascimento: Any,
     habilitado: bool,
     carro_interesse: str,
     valor_entrada: Optional[float],
@@ -2298,6 +2321,30 @@ def salvar_dados_cadastrais_ficha(
     if not nome_completo.strip() or not cpf.strip():
         st.error("Nome completo e CPF são obrigatórios.")
         return
+
+    nascimento_convertido = converter_data_opcional(data_nascimento)
+    if (
+        str(data_nascimento or "").strip()
+        and nascimento_convertido is None
+    ):
+        st.error(
+            "Data de nascimento inválida. Use DD/MM/AAAA ou DD-MM-AAAA."
+        )
+        return
+
+    expedicao_digitada = dados_adicionais.get("data_expedicao")
+    expedicao_convertida = converter_data_opcional(expedicao_digitada)
+    if (
+        str(expedicao_digitada or "").strip()
+        and expedicao_convertida is None
+    ):
+        st.error(
+            "Data de expedição inválida. Use DD/MM/AAAA ou DD-MM-AAAA."
+        )
+        return
+    dados_adicionais["data_expedicao"] = data_para_texto_br(
+        expedicao_convertida
+    )
 
     valor_entrada_atualizacao = (
         None
@@ -2350,9 +2397,7 @@ def salvar_dados_cadastrais_ficha(
                 {
                     "nome_completo": nome_completo.strip(),
                     "cpf": cpf.strip(),
-                    "data_nascimento": converter_data_opcional(
-                        data_nascimento
-                    ),
+                    "data_nascimento": nascimento_convertido,
                     "habilitado": habilitado,
                     "produto_interesse": (
                         carro_interesse.strip() or None
@@ -2562,12 +2607,16 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                     "CPF*",
                     value=valor_lead("cpf"),
                 )
-                nova_data_nascimento = st.date_input(
+                nova_data_nascimento = st.text_input(
                     "Data de nascimento (DD/MM/AAAA)",
-                    value=converter_data_opcional(
-                        valor_lead("data_nascimento")
+                    value=(
+                        data_para_texto_br(
+                            valor_lead("data_nascimento")
+                        )
+                        or ""
                     ),
-                    format="DD/MM/YYYY",
+                    placeholder="DD/MM/AAAA ou DD-MM-AAAA",
+                    help="Sem limite mínimo de ano. Digite a data completa.",
                 )
                 novo_nome_pai = st.text_input(
                     "Nome do pai",
@@ -2581,12 +2630,15 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                     "RG",
                     value=valor_lead("rg"),
                 )
-                nova_data_expedicao = st.date_input(
+                nova_data_expedicao = st.text_input(
                     "Data de expedição do RG (DD/MM/AAAA)",
-                    value=converter_data_opcional(
-                        valor_lead("data_expedicao")
+                    value=(
+                        data_para_texto_br(
+                            valor_lead("data_expedicao")
+                        )
+                        or ""
                     ),
-                    format="DD/MM/YYYY",
+                    placeholder="DD/MM/AAAA ou DD-MM-AAAA",
                 )
                 novo_orgao_expeditor = st.text_input(
                     "Órgão expedidor",
@@ -2724,6 +2776,36 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
     if not salvar:
         return
 
+    nascimento_convertido = None
+    expedicao_formatada = None
+    if gerou_ficha:
+        nascimento_convertido = converter_data_opcional(
+            nova_data_nascimento
+        )
+        if (
+            str(nova_data_nascimento or "").strip()
+            and nascimento_convertido is None
+        ):
+            st.error(
+                "Data de nascimento inválida. Use DD/MM/AAAA ou DD-MM-AAAA."
+            )
+            return
+
+        expedicao_convertida = converter_data_opcional(
+            nova_data_expedicao
+        )
+        if (
+            str(nova_data_expedicao or "").strip()
+            and expedicao_convertida is None
+        ):
+            st.error(
+                "Data de expedição inválida. Use DD/MM/AAAA ou DD-MM-AAAA."
+            )
+            return
+        expedicao_formatada = data_para_texto_br(
+            expedicao_convertida
+        )
+
     if gerou_ficha and (
         not novo_nome_completo
         or not novo_cpf
@@ -2818,9 +2900,7 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                         if gerou_ficha
                         else None
                     ),
-                    "data_nascimento": converter_data_opcional(
-                        nova_data_nascimento
-                    ),
+                    "data_nascimento": nascimento_convertido,
                     "carro_selecionado": (
                         vazio_para_none(novo_carro_selecionado)
                         if gerou_ficha
@@ -2873,9 +2953,7 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                         "nome_pai": vazio_para_none(novo_nome_pai),
                         "nome_mae": vazio_para_none(novo_nome_mae),
                         "rg": vazio_para_none(novo_rg),
-                        "data_expedicao": data_para_texto_br(
-                            nova_data_expedicao
-                        ),
+                        "data_expedicao": expedicao_formatada,
                         "orgao_expeditor": vazio_para_none(
                             novo_orgao_expeditor
                         ),
@@ -3246,10 +3324,10 @@ def mostrar_formulario_novo_lead(
                     value=nome,
                 )
                 cpf = st.text_input("CPF")
-                data_nascimento = st.date_input(
+                data_nascimento = st.text_input(
                     "Data de nascimento (DD/MM/AAAA)",
-                    value=None,
-                    format="DD/MM/YYYY",
+                    placeholder="DD/MM/AAAA ou DD-MM-AAAA",
+                    help="Sem limite mínimo de ano. Digite a data completa.",
                 )
                 carro_selecionado = st.text_input(
                     "Carro selecionado*",
@@ -3296,10 +3374,9 @@ def mostrar_formulario_novo_lead(
                 bairro = st.text_input("Bairro residencial")
             with col_pessoal_2:
                 nome_mae = st.text_input("Nome da mãe")
-                data_expedicao = st.date_input(
+                data_expedicao = st.text_input(
                     "Data de expedição do RG (DD/MM/AAAA)",
-                    value=None,
-                    format="DD/MM/YYYY",
+                    placeholder="DD/MM/AAAA ou DD-MM-AAAA",
                 )
                 cidade = st.text_input("Cidade residencial")
                 estado = st.text_input("Estado residencial", max_chars=2)
@@ -3379,6 +3456,32 @@ def mostrar_formulario_novo_lead(
     if not nome.strip() or not telefone.strip() or not vendedor_id:
         st.warning("Preencha nome, telefone e vendedor.")
         return
+
+    nascimento_convertido = None
+    expedicao_formatada = None
+    if gerou_ficha:
+        nascimento_convertido = converter_data_opcional(data_nascimento)
+        if (
+            str(data_nascimento or "").strip()
+            and nascimento_convertido is None
+        ):
+            st.error(
+                "Data de nascimento inválida. Use DD/MM/AAAA ou DD-MM-AAAA."
+            )
+            return
+
+        expedicao_convertida = converter_data_opcional(data_expedicao)
+        if (
+            str(data_expedicao or "").strip()
+            and expedicao_convertida is None
+        ):
+            st.error(
+                "Data de expedição inválida. Use DD/MM/AAAA ou DD-MM-AAAA."
+            )
+            return
+        expedicao_formatada = data_para_texto_br(
+            expedicao_convertida
+        )
 
     if gerou_ficha and (
         not carro_selecionado.strip()
@@ -3465,11 +3568,7 @@ def mostrar_formulario_novo_lead(
                         if gerou_ficha and nome_completo.strip()
                         else nome.strip()
                     ),
-                    "data_nascimento": (
-                        converter_data_opcional(data_nascimento)
-                        if gerou_ficha
-                        else None
-                    ),
+                    "data_nascimento": nascimento_convertido,
                     "habilitado": habilitado,
                     "aprovou_credito": None,
                     "produto_interesse": (
@@ -3533,9 +3632,7 @@ def mostrar_formulario_novo_lead(
                         "nome_pai": nome_pai.strip() or None,
                         "nome_mae": nome_mae.strip() or None,
                         "rg": rg.strip() or None,
-                        "data_expedicao": data_para_texto_br(
-                            data_expedicao
-                        ),
+                        "data_expedicao": expedicao_formatada,
                         "orgao_expeditor": orgao_expeditor.strip() or None,
                         "empresa": empresa.strip() or None,
                         "cnpj": cnpj.strip() or None,
@@ -5390,12 +5487,19 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                             value=str(ficha.get("cpf") or ""),
                         )
                         d3, d4 = st.columns(2)
-                        nova_data_nascimento = d3.date_input(
+                        nova_data_nascimento = d3.text_input(
                             "Data de nascimento (DD/MM/AAAA)",
-                            value=converter_data_opcional(
-                                ficha.get("data_nascimento")
+                            value=(
+                                data_para_texto_br(
+                                    ficha.get("data_nascimento")
+                                )
+                                or ""
                             ),
-                            format="DD/MM/YYYY",
+                            placeholder="DD/MM/AAAA ou DD-MM-AAAA",
+                            help=(
+                                "Sem limite mínimo de ano. Digite a data "
+                                "completa."
+                            ),
                         )
                         novo_carro = d4.text_input(
                             "Carro selecionado",
@@ -5452,12 +5556,15 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                                 "Nome da mãe",
                                 value=valor_edicao("nome_mae"),
                             )
-                            nova_data_expedicao = st.date_input(
+                            nova_data_expedicao = st.text_input(
                                 "Data de expedição do RG (DD/MM/AAAA)",
-                                value=converter_data_opcional(
-                                    valor_edicao("data_expedicao")
+                                value=(
+                                    data_para_texto_br(
+                                        valor_edicao("data_expedicao")
+                                    )
+                                    or ""
                                 ),
-                                format="DD/MM/YYYY",
+                                placeholder="DD/MM/AAAA ou DD-MM-AAAA",
                             )
                             st.markdown(
                                 "#### Dados da empresa (opcional)"
@@ -5538,8 +5645,8 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                             "nome_pai": novo_nome_pai.strip() or None,
                             "nome_mae": novo_nome_mae.strip() or None,
                             "rg": novo_rg.strip() or None,
-                            "data_expedicao": data_para_texto_br(
-                                nova_data_expedicao
+                            "data_expedicao": (
+                                nova_data_expedicao.strip() or None
                             ),
                             "orgao_expeditor": (
                                 novo_orgao_expeditor.strip() or None
