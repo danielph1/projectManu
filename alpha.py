@@ -3315,7 +3315,7 @@ def mostrar_formulario_novo_lead(
         banco_correntista = None
 
         if gerou_ficha:
-            st.markdown("### 📝 Dados da ficha")
+            st.markdown("### Dados da ficha")
             col_ficha_1, col_ficha_2 = st.columns(2)
 
             with col_ficha_1:
