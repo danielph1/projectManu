@@ -3101,28 +3101,7 @@ def mostrar_formulario_novo_lead(
                 valor_entrada,
                 observacao,
                 created_at,
-                updated_at,
-                nome_pai,
-                nome_mae,
-                rg,
-                data_expedicao,
-                orgao_expeditor,
-                empresa,
-                cnpj,
-                endereco_empresa,
-                bairro_empresa,
-                cidade_empresa,
-                estado_empresa,
-                cep_empresa,
-                endereco,
-                bairro,
-                cidade,
-                estado,
-                cep,
-                email,
-                tempo_carreira,
-                salario,
-                banco_correntista
+                updated_at
             )
             VALUES (
                 :nome,
@@ -3144,28 +3123,7 @@ def mostrar_formulario_novo_lead(
                 :valor_entrada,
                 :observacao,
                 NOW(),
-                NOW(),
-            :nome_pai,
-            :nome_mae,
-            :rg,
-            :data_expedicao,
-            :orgao_expeditor,
-            :empresa,
-            :cnpj,
-            :endereco_empresa,
-            :bairro_empresa,
-            :cidade_empresa,
-            :estado_empresa,
-                :cep_empresa,
-            :endereco,
-            :bairro,
-            :cidade,
-            :estado,
-                :cep,
-            :email,
-            :tempo_carreira,
-            :salario,
-            :banco_correntista
+                NOW()
             )
             RETURNING id
             """
@@ -3217,109 +3175,65 @@ def mostrar_formulario_novo_lead(
                         if observacao.strip()
                         else None
                     ),
-                    "nome_pai": (
-                        nome_pai.strip()
-                        if gerou_ficha and nome_pai
-                        else None
-                        ),
-                    "nome_mae": (
-                        nome_mae.strip()
-                        if gerou_ficha and nome_mae
-                        else None
-                        ),
-                    "rg": (
-                        rg
-                        if gerou_ficha and rg
-                        else None
-                        ),
-                    "data_expedicao": (
-                        data_expedicao
-                        if gerou_ficha and data_expedicao
-                        else None),
-                    "orgao_expeditor": (
-                        orgao_expeditor.strip()
-                        if gerou_ficha and orgao_expeditor
-                        else None
-                        ),
-                    "empresa": (
-                        empresa.strip()
-                        if gerou_ficha and empresa
-                        else None
-                        ),
-                    "cnpj": (cnpj.strip()
-                    if gerou_ficha and cnpj
-                    else None
-                    ),
-                    "endereco_empresa":(
-                        endereco_empresa.strip()
-                        if gerou_ficha and endereco_empresa
-                        else None
-                        ),
-                    "bairro_empresa":(
-                        bairro_empresa.strip()
-                        if gerou_ficha and bairro_empresa
-                        else None
-                        ),
-                    "cidade_empresa":(
-                        cidade_empresa.strip()
-                        if gerou_ficha and cidade_empresa
-                        else None
-                        ),
-                    "estado_empresa":(
-                        estado_empresa.strip()
-                        if gerou_ficha and estado_empresa
-                        else None
-                        ),
-                    "cep_empresa":(
-                        cep_empresa.strip()
-                        if gerou_ficha and cep_empresa
-                        else None
-                        ),
-                    "endereco":(
-                        endereco.strip()
-                        if gerou_ficha and endereco
-                        else None
-                        ),
-                    "bairro":(
-                        bairro.strip()
-                        if gerou_ficha and bairro
-                        else None
-                        ),
-                    "cidade":(cidade.strip()
-                    if gerou_ficha and cidade
-                    else None),
-                    "estado":(
-                        estado.strip()
-                        if gerou_ficha and estado
-                        else None
-                        ),
-                    "cep":(
-                        cep.strip()
-                        if gerou_ficha and cep
-                        else None
-                        ),
-                    "email":(
-                        email.strip()
-                        if gerou_ficha and email
-                        else None
-                        ),
-                    "tempo_carreira":(
-                        tempo_carreira.strip()
-                        if gerou_ficha and tempo_carreira
-                        else None
-                        ),
-                    "salario":(
-                        salario
-                        if gerou_ficha and salario
-                        else None),
-                    "banco_correntista":(
-                        banco_correntista.strip()
-                        if gerou_ficha and banco_correntista else None
-                        ),
                 },
             ).scalar_one()
 
             if gerou_ficha:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE public.leads
+                        SET
+                            nome_pai = :nome_pai,
+                            nome_mae = :nome_mae,
+                            rg = :rg,
+                            data_expedicao = :data_expedicao,
+                            orgao_expeditor = :orgao_expeditor,
+                            empresa = :empresa,
+                            cnpj = :cnpj,
+                            endereco_empresa = :endereco_empresa,
+                            bairro_empresa = :bairro_empresa,
+                            cidade_empresa = :cidade_empresa,
+                            estado_empresa = :estado_empresa,
+                            cep_empresa = :cep_empresa,
+                            endereco = :endereco,
+                            bairro = :bairro,
+                            cidade = :cidade,
+                            estado = :estado,
+                            cep = :cep,
+                            email = :email,
+                            tempo_carreira = :tempo_carreira,
+                            salario = :salario,
+                            banco_correntista = :banco_correntista
+                        WHERE id = :lead_id
+                        """
+                    ),
+                    {
+                        "lead_id": int(lead_id),
+                        "nome_pai": nome_pai.strip() or None,
+                        "nome_mae": nome_mae.strip() or None,
+                        "rg": rg.strip() or None,
+                        "data_expedicao": data_expedicao.strip() or None,
+                        "orgao_expeditor": orgao_expeditor.strip() or None,
+                        "empresa": empresa.strip() or None,
+                        "cnpj": cnpj.strip() or None,
+                        "endereco_empresa": endereco_empresa.strip() or None,
+                        "bairro_empresa": bairro_empresa.strip() or None,
+                        "cidade_empresa": cidade_empresa.strip() or None,
+                        "estado_empresa": estado_empresa.strip() or None,
+                        "cep_empresa": cep_empresa.strip() or None,
+                        "endereco": endereco.strip() or None,
+                        "bairro": bairro.strip() or None,
+                        "cidade": cidade.strip() or None,
+                        "estado": estado.strip() or None,
+                        "cep": cep.strip() or None,
+                        "email": email.strip() or None,
+                        "tempo_carreira": tempo_carreira.strip() or None,
+                        "salario": salario or None,
+                        "banco_correntista": banco_correntista.strip() or None,
+                    },
+                )
+
                 ficha_id = criar_ficha_credito(
                     conn=conn,
                     lead_id=int(lead_id),
