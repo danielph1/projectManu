@@ -2216,6 +2216,7 @@ def salvar_dados_cadastrais_ficha(
     habilitado: bool,
     carro_interesse: str,
     valor_entrada: Optional[float],
+    dados_adicionais: Dict[str, Any],
 ) -> None:
     pode_alterar = (
         usuario_tem("edit_bank_results")
@@ -2252,6 +2253,27 @@ def salvar_dados_cadastrais_ficha(
                         habilitado = :habilitado,
                         produto_interesse = :produto_interesse,
                         carro_selecionado = :produto_interesse,
+                        nome_pai = :nome_pai,
+                        nome_mae = :nome_mae,
+                        rg = :rg,
+                        data_expedicao = :data_expedicao,
+                        orgao_expeditor = :orgao_expeditor,
+                        empresa = :empresa,
+                        cnpj = :cnpj,
+                        endereco_empresa = :endereco_empresa,
+                        bairro_empresa = :bairro_empresa,
+                        cidade_empresa = :cidade_empresa,
+                        estado_empresa = :estado_empresa,
+                        cep_empresa = :cep_empresa,
+                        endereco = :endereco,
+                        bairro = :bairro,
+                        cidade = :cidade,
+                        estado = :estado,
+                        cep = :cep,
+                        email = :email,
+                        tempo_carreira = :tempo_carreira,
+                        salario = :salario,
+                        banco_correntista = :banco_correntista,
                         valor_entrada = COALESCE(
                             :valor_entrada,
                             valor_entrada
@@ -2268,8 +2290,9 @@ def salvar_dados_cadastrais_ficha(
                     "produto_interesse": (
                         carro_interesse.strip() or None
                     ),
-                        "valor_entrada": valor_entrada_atualizacao,
+                    "valor_entrada": valor_entrada_atualizacao,
                     "lead_id": ficha["lead_id"],
+                    **dados_adicionais,
                 },
             )
             conn.execute(
@@ -5051,6 +5074,12 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
 
             if pode_editar_dados:
                 with st.expander("Editar dados da ficha"):
+                    def valor_edicao(campo: str) -> str:
+                        valor = ficha.get(campo)
+                        if valor is None or pd.isna(valor):
+                            return ""
+                        return str(valor)
+
                     with st.form(f"form_dados_ficha_{ficha['id']}"):
                         d1, d2 = st.columns(2)
                         novo_nome_completo = d1.text_input(
@@ -5076,6 +5105,105 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                                 or ""
                             ),
                         )
+
+                        st.markdown("#### Dados pessoais e endereço")
+                        e1, e2 = st.columns(2)
+                        with e1:
+                            novo_nome_pai = st.text_input(
+                                "Nome do pai",
+                                value=valor_edicao("nome_pai"),
+                            )
+                            novo_rg = st.text_input(
+                                "RG",
+                                value=valor_edicao("rg"),
+                            )
+                            novo_orgao_expeditor = st.text_input(
+                                "Órgão expedidor",
+                                value=valor_edicao("orgao_expeditor"),
+                            )
+                            novo_email = st.text_input(
+                                "E-mail",
+                                value=valor_edicao("email"),
+                            )
+                            novo_endereco = st.text_input(
+                                "Endereço residencial",
+                                value=valor_edicao("endereco"),
+                            )
+                            novo_bairro = st.text_input(
+                                "Bairro residencial",
+                                value=valor_edicao("bairro"),
+                            )
+                            nova_cidade = st.text_input(
+                                "Cidade residencial",
+                                value=valor_edicao("cidade"),
+                            )
+                            novo_estado = st.text_input(
+                                "Estado residencial",
+                                value=valor_edicao("estado"),
+                                max_chars=2,
+                            )
+                            novo_cep = st.text_input(
+                                "CEP residencial",
+                                value=valor_edicao("cep"),
+                                max_chars=9,
+                            )
+                        with e2:
+                            novo_nome_mae = st.text_input(
+                                "Nome da mãe",
+                                value=valor_edicao("nome_mae"),
+                            )
+                            nova_data_expedicao = st.text_input(
+                                "Data de expedição do RG",
+                                value=valor_edicao("data_expedicao"),
+                            )
+                            nova_empresa = st.text_input(
+                                "Nome da empresa",
+                                value=valor_edicao("empresa"),
+                            )
+                            novo_cnpj = st.text_input(
+                                "CNPJ",
+                                value=valor_edicao("cnpj"),
+                            )
+                            novo_endereco_empresa = st.text_input(
+                                "Endereço da empresa",
+                                value=valor_edicao("endereco_empresa"),
+                            )
+                            novo_bairro_empresa = st.text_input(
+                                "Bairro da empresa",
+                                value=valor_edicao("bairro_empresa"),
+                            )
+                            nova_cidade_empresa = st.text_input(
+                                "Cidade da empresa",
+                                value=valor_edicao("cidade_empresa"),
+                            )
+                            novo_estado_empresa = st.text_input(
+                                "Estado da empresa",
+                                value=valor_edicao("estado_empresa"),
+                                max_chars=2,
+                            )
+                            novo_cep_empresa = st.text_input(
+                                "CEP da empresa",
+                                value=valor_edicao("cep_empresa"),
+                                max_chars=9,
+                            )
+
+                        st.markdown("#### Trabalho e banco")
+                        t1, t2 = st.columns(2)
+                        novo_tempo_carreira = t1.text_input(
+                            "Tempo de trabalho na empresa",
+                            value=valor_edicao("tempo_carreira"),
+                        )
+                        novo_salario = t2.number_input(
+                            "Salário mensal",
+                            min_value=0.0,
+                            value=numero_seguro(ficha.get("salario")),
+                            step=100.0,
+                        )
+                        novo_banco_correntista = st.text_input(
+                            "Banco correntista",
+                            value=valor_edicao("banco_correntista"),
+                        )
+
                         novo_habilitado = st.checkbox(
                             "Cliente habilitado",
                             value=bool(ficha.get("habilitado")),
@@ -5096,6 +5224,47 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                         )
 
                     if salvar_cadastro:
+                        dados_adicionais = {
+                            "nome_pai": novo_nome_pai.strip() or None,
+                            "nome_mae": novo_nome_mae.strip() or None,
+                            "rg": novo_rg.strip() or None,
+                            "data_expedicao": (
+                                nova_data_expedicao.strip() or None
+                            ),
+                            "orgao_expeditor": (
+                                novo_orgao_expeditor.strip() or None
+                            ),
+                            "empresa": nova_empresa.strip() or None,
+                            "cnpj": novo_cnpj.strip() or None,
+                            "endereco_empresa": (
+                                novo_endereco_empresa.strip() or None
+                            ),
+                            "bairro_empresa": (
+                                novo_bairro_empresa.strip() or None
+                            ),
+                            "cidade_empresa": (
+                                nova_cidade_empresa.strip() or None
+                            ),
+                            "estado_empresa": (
+                                novo_estado_empresa.strip() or None
+                            ),
+                            "cep_empresa": (
+                                novo_cep_empresa.strip() or None
+                            ),
+                            "endereco": novo_endereco.strip() or None,
+                            "bairro": novo_bairro.strip() or None,
+                            "cidade": nova_cidade.strip() or None,
+                            "estado": novo_estado.strip() or None,
+                            "cep": novo_cep.strip() or None,
+                            "email": novo_email.strip() or None,
+                            "tempo_carreira": (
+                                novo_tempo_carreira.strip() or None
+                            ),
+                            "salario": novo_salario or None,
+                            "banco_correntista": (
+                                novo_banco_correntista.strip() or None
+                            ),
+                        }
                         salvar_dados_cadastrais_ficha(
                             usuario,
                             ficha,
@@ -5105,6 +5274,7 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                             novo_habilitado,
                             novo_carro,
                             nova_entrada_ficha,
+                            dados_adicionais,
                         )
 
             mostrar_botao_anexos_ficha(
