@@ -688,7 +688,29 @@ def buscar_leads(
             l.vendeu,
             l.respondeu,
             l.cpf,
+            l.nome_completo,
             l.data_nascimento,
+            l.nome_pai,
+            l.nome_mae,
+            l.rg,
+            l.data_expedicao,
+            l.orgao_expeditor,
+            l.email,
+            l.endereco,
+            l.bairro,
+            l.cidade,
+            l.estado,
+            l.cep,
+            l.empresa,
+            l.cnpj,
+            l.endereco_empresa,
+            l.bairro_empresa,
+            l.cidade_empresa,
+            l.estado_empresa,
+            l.cep_empresa,
+            l.tempo_carreira,
+            l.salario,
+            l.banco_correntista,
             l.habilitado,
             l.aprovou_credito,
             l.carro_selecionado,
@@ -2404,6 +2426,19 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
 
     st.write(f"Editando informações de **{lead_data['nome_lead']}**")
 
+    # Fora do formulário para atualizar a tela ao marcar/desmarcar.
+    gerou_ficha = st.checkbox(
+        "Gerou ficha",
+        value=bool(lead_data.get("gerou_ficha", False)),
+        key=f"editar_gerou_ficha_{lead_data['id']}",
+    )
+
+    def valor_lead(campo: str) -> str:
+        valor = lead_data.get(campo)
+        if valor is None or pd.isna(valor):
+            return ""
+        return str(valor)
+
     with st.form(f"form_edicao_{lead_data['id']}"):
         novo_nome = st.text_input(
             "Nome do Lead",
@@ -2442,65 +2477,166 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                 "Apenas o gerente pode alterar o vendedor responsável."
             )
 
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            gerou_ficha = st.checkbox(
-                "Gerou ficha",
-                value=bool(lead_data.get("gerou_ficha", False)),
-            )
-        with col2:
-            respondeu = st.checkbox(
-                "Respondeu",
-                value=bool(lead_data.get("respondeu", False)),
-            )
-        with col3:
-            venda_concluida = st.checkbox(
-                "Venda concluída",
-                value=bool(
-                    lead_data.get(
-                        "venda_concluida",
-                        lead_data.get("vendeu", False),
-                    )
-                ),
-            )
+        col2, col3 = st.columns(2)
+        respondeu = col2.checkbox(
+            "Respondeu",
+            value=bool(lead_data.get("respondeu", False)),
+        )
+        venda_concluida = col3.checkbox(
+            "Venda concluída",
+            value=bool(
+                lead_data.get(
+                    "venda_concluida",
+                    lead_data.get("vendeu", False),
+                )
+            ),
+        )
 
         novo_nome_completo = None
-        if gerou_ficha:
-            novo_nome_completo = st.text_input(
-                "Nome completo",
-                value=str(
-                    lead_data.get("nome_completo")
-                    or lead_data.get("nome_lead")
-                    or ""
-                ),
-            )
-        novo_cpf = st.text_input(
-            "CPF",
-            value=str(lead_data.get("cpf") or ""),
-        )
-        nova_data_nascimento = st.text_input(
-            "Data de nascimento",
-            value=str(lead_data.get("data_nascimento") or ""),
-        )
+        novo_cpf = None
+        nova_data_nascimento = None
+        nova_habilitacao = None
+        nova_entrada = None
         novo_carro_selecionado = None
         novo_ano_carro = None
         nova_placa_carro = None
         novo_valor_carro = None
+
         if gerou_ficha:
-            st.markdown("### Veículo da ficha")
+            st.markdown("### Dados completos da ficha")
+            ficha_dados_1, ficha_dados_2 = st.columns(2)
+            with ficha_dados_1:
+                novo_nome_completo = st.text_input(
+                    "Nome completo*",
+                    value=(
+                        valor_lead("nome_completo")
+                        or valor_lead("nome_lead")
+                    ),
+                )
+                novo_cpf = st.text_input(
+                    "CPF*",
+                    value=valor_lead("cpf"),
+                )
+                nova_data_nascimento = st.text_input(
+                    "Data de nascimento",
+                    value=valor_lead("data_nascimento"),
+                )
+                novo_nome_pai = st.text_input(
+                    "Nome do pai",
+                    value=valor_lead("nome_pai"),
+                )
+                novo_nome_mae = st.text_input(
+                    "Nome da mãe",
+                    value=valor_lead("nome_mae"),
+                )
+                novo_rg = st.text_input(
+                    "RG",
+                    value=valor_lead("rg"),
+                )
+                nova_data_expedicao = st.text_input(
+                    "Data de expedição do RG",
+                    value=valor_lead("data_expedicao"),
+                )
+                novo_orgao_expeditor = st.text_input(
+                    "Órgão expedidor",
+                    value=valor_lead("orgao_expeditor"),
+                )
+                novo_email = st.text_input(
+                    "E-mail",
+                    value=valor_lead("email"),
+                )
+                novo_endereco = st.text_input(
+                    "Endereço residencial",
+                    value=valor_lead("endereco"),
+                )
+                novo_bairro = st.text_input(
+                    "Bairro residencial",
+                    value=valor_lead("bairro"),
+                )
+                nova_cidade = st.text_input(
+                    "Cidade residencial",
+                    value=valor_lead("cidade"),
+                )
+                novo_estado = st.text_input(
+                    "Estado residencial",
+                    value=valor_lead("estado"),
+                    max_chars=2,
+                )
+                novo_cep = st.text_input(
+                    "CEP residencial",
+                    value=valor_lead("cep"),
+                    max_chars=9,
+                )
+
+            with ficha_dados_2:
+                nova_empresa = st.text_input(
+                    "Nome da empresa",
+                    value=valor_lead("empresa"),
+                )
+                novo_cnpj = st.text_input(
+                    "CNPJ",
+                    value=valor_lead("cnpj"),
+                )
+                novo_endereco_empresa = st.text_input(
+                    "Endereço da empresa",
+                    value=valor_lead("endereco_empresa"),
+                )
+                novo_bairro_empresa = st.text_input(
+                    "Bairro da empresa",
+                    value=valor_lead("bairro_empresa"),
+                )
+                nova_cidade_empresa = st.text_input(
+                    "Cidade da empresa",
+                    value=valor_lead("cidade_empresa"),
+                )
+                novo_estado_empresa = st.text_input(
+                    "Estado da empresa",
+                    value=valor_lead("estado_empresa"),
+                    max_chars=2,
+                )
+                novo_cep_empresa = st.text_input(
+                    "CEP da empresa",
+                    value=valor_lead("cep_empresa"),
+                    max_chars=9,
+                )
+                novo_tempo_carreira = st.text_input(
+                    "Tempo de trabalho na empresa",
+                    value=valor_lead("tempo_carreira"),
+                )
+                novo_salario = st.number_input(
+                    "Salário mensal",
+                    min_value=0.0,
+                    value=numero_seguro(lead_data.get("salario")),
+                    step=100.0,
+                )
+                novo_banco_correntista = st.text_input(
+                    "Banco correntista",
+                    value=valor_lead("banco_correntista"),
+                )
+
+            nova_habilitacao = st.checkbox(
+                "Cliente habilitado",
+                value=bool(lead_data.get("habilitado")),
+            )
+            nova_entrada = st.number_input(
+                "Valor de entrada",
+                min_value=0.0,
+                value=numero_seguro(lead_data.get("valor_entrada")),
+                step=100.0,
+            )
+            st.markdown("#### Veículo da ficha")
             ficha_col_1, ficha_col_2 = st.columns(2)
             with ficha_col_1:
                 novo_carro_selecionado = st.text_input(
                     "Carro selecionado*",
-                    value=str(
-                        lead_data.get("carro_selecionado")
-                        or lead_data.get("produto_interesse")
-                        or ""
+                    value=(
+                        valor_lead("carro_selecionado")
+                        or valor_lead("produto_interesse")
                     ),
                 )
                 nova_placa_carro = st.text_input(
                     "Placa do carro*",
-                    value=str(lead_data.get("placa_carro") or ""),
+                    value=valor_lead("placa_carro"),
                     placeholder="ABC1D23",
                     max_chars=8,
                 )
@@ -2510,9 +2646,7 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                     min_value=1900,
                     max_value=2100,
                     step=1,
-                    value=(
-                        inteiro_seguro(lead_data.get("ano_carro"), 2026)
-                    ),
+                    value=inteiro_seguro(lead_data.get("ano_carro"), 2026),
                 )
                 novo_valor_carro = st.number_input(
                     "Valor do carro*",
@@ -2520,6 +2654,7 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                     step=1000.0,
                     value=numero_seguro(lead_data.get("valor_carro")),
                 )
+
         nova_observacao = st.text_area(
             "Observações",
             value=str(lead_data.get("observacao") or ""),
@@ -2535,14 +2670,16 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
         return
 
     if gerou_ficha and (
-        not novo_carro_selecionado
+        not novo_nome_completo
+        or not novo_cpf
+        or not novo_carro_selecionado
         or not nova_placa_carro
         or not novo_ano_carro
         or novo_valor_carro <= 0
     ):
         st.warning(
-            "Ao gerar a ficha, informe carro selecionado, placa, ano "
-            "e valor do carro."
+            "Para gerar a ficha, informe nome completo, CPF, carro, "
+            "placa, ano e valor do carro."
         )
         return
 
@@ -2573,12 +2710,18 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                     THEN aprovou_credito
                     ELSE NULL
                 END,
-                cpf = :cpf,
+                cpf = CASE
+                    WHEN :gerou_ficha = TRUE THEN :cpf
+                    ELSE cpf
+                END,
                 nome_completo = COALESCE(
                     :nome_completo,
                     nome_completo
                 ),
-                data_nascimento = :data_nascimento,
+                data_nascimento = CASE
+                    WHEN :gerou_ficha = TRUE THEN :data_nascimento
+                    ELSE data_nascimento
+                END,
                 produto_interesse = :carro_selecionado,
                 carro_selecionado = :carro_selecionado,
                 ano_carro = :ano_carro,
@@ -2639,14 +2782,105 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
             )
 
             if gerou_ficha:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE public.leads
+                        SET
+                            nome_pai = :nome_pai,
+                            nome_mae = :nome_mae,
+                            rg = :rg,
+                            data_expedicao = :data_expedicao,
+                            orgao_expeditor = :orgao_expeditor,
+                            empresa = :empresa,
+                            cnpj = :cnpj,
+                            endereco_empresa = :endereco_empresa,
+                            bairro_empresa = :bairro_empresa,
+                            cidade_empresa = :cidade_empresa,
+                            estado_empresa = :estado_empresa,
+                            cep_empresa = :cep_empresa,
+                            endereco = :endereco,
+                            bairro = :bairro,
+                            cidade = :cidade,
+                            estado = :estado,
+                            cep = :cep,
+                            email = :email,
+                            tempo_carreira = :tempo_carreira,
+                            salario = :salario,
+                            banco_correntista = :banco_correntista,
+                            habilitado = :habilitado,
+                            valor_entrada = :valor_entrada
+                        WHERE id = :lead_id
+                        """
+                    ),
+                    {
+                        "lead_id": lead_data["id"],
+                        "nome_pai": vazio_para_none(novo_nome_pai),
+                        "nome_mae": vazio_para_none(novo_nome_mae),
+                        "rg": vazio_para_none(novo_rg),
+                        "data_expedicao": vazio_para_none(
+                            nova_data_expedicao
+                        ),
+                        "orgao_expeditor": vazio_para_none(
+                            novo_orgao_expeditor
+                        ),
+                        "empresa": vazio_para_none(nova_empresa),
+                        "cnpj": vazio_para_none(novo_cnpj),
+                        "endereco_empresa": vazio_para_none(
+                            novo_endereco_empresa
+                        ),
+                        "bairro_empresa": vazio_para_none(
+                            novo_bairro_empresa
+                        ),
+                        "cidade_empresa": vazio_para_none(
+                            nova_cidade_empresa
+                        ),
+                        "estado_empresa": vazio_para_none(
+                            novo_estado_empresa
+                        ),
+                        "cep_empresa": vazio_para_none(novo_cep_empresa),
+                        "endereco": vazio_para_none(novo_endereco),
+                        "bairro": vazio_para_none(novo_bairro),
+                        "cidade": vazio_para_none(nova_cidade),
+                        "estado": vazio_para_none(novo_estado),
+                        "cep": vazio_para_none(novo_cep),
+                        "email": vazio_para_none(novo_email),
+                        "tempo_carreira": vazio_para_none(
+                            novo_tempo_carreira
+                        ),
+                        "salario": novo_salario or None,
+                        "banco_correntista": vazio_para_none(
+                            novo_banco_correntista
+                        ),
+                        "habilitado": nova_habilitacao,
+                        "valor_entrada": nova_entrada,
+                    },
+                )
+
                 criar_ficha_credito(
                     conn=conn,
                     lead_id=int(lead_data["id"]),
                     vendedor_id=novo_vendedor_id,
                     valor_entrada=float(
-                        lead_data.get("valor_entrada") or 0
+                        nova_entrada or 0
                     ),
                     usuario_id=usuario["id"],
+                )
+                conn.execute(
+                    text(
+                        """
+                        UPDATE public.fichas_credito
+                        SET valor_entrada = :valor_entrada,
+                            atualizado_por_id = :usuario_id,
+                            updated_at = NOW()
+                        WHERE lead_id = :lead_id
+                        """
+                    ),
+                    {
+                        "valor_entrada": nova_entrada,
+                        "usuario_id": usuario["id"],
+                        "lead_id": lead_data["id"],
+                    },
                 )
 
         st.success("Lead atualizado com sucesso.")
