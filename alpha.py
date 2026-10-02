@@ -120,6 +120,46 @@ def normalizar_loja(loja: Any) -> str:
     return valor if valor in LOJAS_DISPONIVEIS else "381"
 
 
+def gerar_link_whatsapp(telefone: Any) -> Optional[str]:
+    """Gera link wa.me para números brasileiros cadastrados."""
+    if telefone is None:
+        return None
+    try:
+        if pd.isna(telefone):
+            return None
+    except (TypeError, ValueError):
+        pass
+
+    if isinstance(telefone, (int, float)):
+        try:
+            telefone = str(int(telefone))
+        except (OverflowError, ValueError):
+            return None
+
+    digitos = "".join(
+        caractere
+        for caractere in str(telefone)
+        if caractere.isdigit()
+    )
+    if not digitos:
+        return None
+
+    # Remove prefixos nacionais comuns antes de acrescentar o código do Brasil.
+    if digitos.startswith("0") and len(digitos) in {11, 12}:
+        digitos = digitos[1:]
+    elif digitos.startswith("0") and len(digitos) in {13, 14}:
+        digitos = digitos[3:]
+
+    if digitos.startswith("55") and len(digitos) in {12, 13}:
+        numero_internacional = digitos
+    elif len(digitos) in {10, 11}:
+        numero_internacional = f"55{digitos}"
+    else:
+        return None
+
+    return f"https://wa.me/{numero_internacional}"
+
+
 PERMISSIONS: Dict[str, Set[str]] = {
     "vendedor": {
         "view_leads",
@@ -147,7 +187,6 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "view_leads",
         "view_stock",
         "view_transferencias",
-        "use_elfen_ai",
         "use_chat",
         "view_tasks",
         "respond_tasks",
@@ -722,10 +761,30 @@ def buscar_leads(
             l.updated_at,
             l.vendedor_id,
             v.nome AS nome_vendedor,
+            ultima_transferencia.vendedor_origem_nome
+                AS ultima_transferencia_origem,
+            ultima_transferencia.vendedor_destino_nome
+                AS ultima_transferencia_destino,
+            ultima_transferencia.transferido_por_nome
+                AS ultima_transferencia_por,
+            ultima_transferencia.transferido_em
+                AS ultima_transferencia_em,
             COUNT(*) OVER() AS total_registros
         FROM public.leads l
         LEFT JOIN public.vendedores v
             ON v.id = l.vendedor_id
+        LEFT JOIN LATERAL (
+            SELECT
+                t.vendedor_origem_nome,
+                t.vendedor_destino_nome,
+                t.transferido_por_nome,
+                t.transferido_em
+                    AT TIME ZONE 'America/Sao_Paulo' AS transferido_em
+            FROM public.lead_transferencias t
+            WHERE t.lead_id = l.id
+            ORDER BY t.transferido_em DESC, t.id DESC
+            LIMIT 1
+        ) ultima_transferencia ON TRUE
         WHERE {" AND ".join(f"({filtro})" for filtro in filtros)}
         ORDER BY l.updated_at DESC NULLS LAST, l.id DESC
         LIMIT :limite
@@ -1943,7 +2002,12 @@ def obter_fichas_documentais(usuario: Dict[str, Any]) -> pd.DataFrame:
             v.nome AS vendedor_nome,
             COALESCE(p.status, 'nao_iniciado') AS transferencia_status,
             p.observacao AS transferencia_observacao,
-            p.updated_at AS transferencia_updated_at
+            p.updated_at AS transferencia_updated_at,
+            COALESCE(p.reconheceu_firma, FALSE)
+                AS transferencia_reconheceu_firma,
+            COALESCE(p.gravame, FALSE) AS transferencia_gravame,
+            COALESCE(p.documento_pronto, FALSE)
+                AS transferencia_documento_pronto
         FROM public.fichas_credito f
         JOIN public.leads l
             ON l.id = f.lead_id
@@ -1977,6 +2041,9 @@ def salvar_processo_transferencia(
     ficha: pd.Series,
     status: str,
     observacao: str,
+    reconheceu_firma: bool,
+    gravame: bool,
+    documento_pronto: bool,
 ) -> None:
     if usuario["tipo"] not in {"documentista", "gerente"}:
         st.error("Você não pode atualizar o processo documental.")
@@ -1996,18 +2063,27 @@ def salvar_processo_transferencia(
                         ficha_id,
                         status,
                         observacao,
-                        atualizado_por_id
+                        atualizado_por_id,
+                        reconheceu_firma,
+                        gravame,
+                        documento_pronto
                     )
                     VALUES (
                         :ficha_id,
                         :status,
                         :observacao,
-                        :usuario_id
+                        :usuario_id,
+                        :reconheceu_firma,
+                        :gravame,
+                        :documento_pronto
                     )
                     ON CONFLICT (ficha_id) DO UPDATE
                     SET status = EXCLUDED.status,
                         observacao = EXCLUDED.observacao,
                         atualizado_por_id = EXCLUDED.atualizado_por_id,
+                        reconheceu_firma = EXCLUDED.reconheceu_firma,
+                        gravame = EXCLUDED.gravame,
+                        documento_pronto = EXCLUDED.documento_pronto,
                         updated_at = NOW()
                     """
                 ),
@@ -2016,6 +2092,9 @@ def salvar_processo_transferencia(
                     "status": status,
                     "observacao": observacao.strip() or None,
                     "usuario_id": usuario["id"],
+                    "reconheceu_firma": reconheceu_firma,
+                    "gravame": gravame,
+                    "documento_pronto": documento_pronto,
                 },
             )
 
@@ -2820,6 +2899,37 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
         )
         return
 
+    transferencia_solicitada = novo_vendedor_id != vendedor_atual
+    vendedor_destino_nome = None
+    vendedor_origem_nome = None
+    vendedor_origem_id = None
+    if transferencia_solicitada:
+        if usuario["tipo"] != "gerente":
+            st.error("Somente o gerente pode transferir um lead.")
+            return
+
+        destino = df_vendedores.loc[
+            df_vendedores["id"] == novo_vendedor_id,
+            "nome",
+        ]
+        if destino.empty:
+            st.error("Não foi possível identificar o vendedor de destino.")
+            return
+
+        vendedor_destino_nome = str(destino.iloc[0])
+        vendedor_origem_nome_bruto = lead_data.get("nome_vendedor")
+        vendedor_origem_nome = (
+            str(vendedor_origem_nome_bruto)
+            if pd.notna(vendedor_origem_nome_bruto)
+            and str(vendedor_origem_nome_bruto).strip()
+            else "Sem vendedor"
+        )
+        vendedor_origem_id = (
+            int(vendedor_atual)
+            if pd.notna(vendedor_atual)
+            else None
+        )
+
     nova_placa_carro = (
         nova_placa_carro.strip().replace("-", "").replace(" ", "").upper()
         if gerou_ficha and nova_placa_carro
@@ -2915,6 +3025,55 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                     "lead_id": lead_data["id"],
                 },
             )
+
+            if transferencia_solicitada:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO public.lead_transferencias (
+                            lead_id,
+                            vendedor_origem_id,
+                            vendedor_origem_nome,
+                            vendedor_destino_id,
+                            vendedor_destino_nome,
+                            transferido_por_id,
+                            transferido_por_nome
+                        )
+                        VALUES (
+                            :lead_id,
+                            :vendedor_origem_id,
+                            :vendedor_origem_nome,
+                            :vendedor_destino_id,
+                            :vendedor_destino_nome,
+                            :transferido_por_id,
+                            :transferido_por_nome
+                        )
+                        """
+                    ),
+                    {
+                        "lead_id": int(lead_data["id"]),
+                        "vendedor_origem_id": vendedor_origem_id,
+                        "vendedor_origem_nome": vendedor_origem_nome,
+                        "vendedor_destino_id": int(novo_vendedor_id),
+                        "vendedor_destino_nome": vendedor_destino_nome,
+                        "transferido_por_id": int(usuario["id"]),
+                        "transferido_por_nome": str(usuario["nome"]),
+                    },
+                )
+                conn.execute(
+                    text(
+                        """
+                        UPDATE public.fichas_credito
+                        SET vendedor_id = :vendedor_id,
+                            updated_at = NOW()
+                        WHERE lead_id = :lead_id
+                        """
+                    ),
+                    {
+                        "vendedor_id": int(novo_vendedor_id),
+                        "lead_id": int(lead_data["id"]),
+                    },
+                )
 
             if gerou_ficha:
                 conn.execute(
@@ -3016,6 +3175,7 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                     },
                 )
 
+        st.cache_data.clear()
         st.success("Lead atualizado com sucesso.")
         st.rerun()
 
@@ -3142,24 +3302,6 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
                 st.session_state["abrir_formulario"] = True
                 st.rerun()
 
-        if usuario_tem("view_transferencias"):
-            if st.button(
-                "Processos de Transferência",
-                use_container_width=True,
-                type=(
-                    "primary"
-                    if pagina in {"documentos", "transferencias"}
-                    or (
-                        usuario["tipo"] == ["documentista", "vendedor", "gerente"]
-                        and pagina == "leads"
-                    )
-                    else "secondary"
-                ),
-            ):
-                st.session_state["pagina_atual"] = "transferencias"
-                st.session_state["abrir_formulario"] = False
-                st.rerun()
-
         if usuario_tem("view_team"):
             if st.button(
                 "Equipe de Vendedores",
@@ -3229,13 +3371,19 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
                 st.session_state["abrir_formulario"] = False
                 st.rerun()
 
-        if usuario_tem("use_elfen_ai"):
+        # Mantém processos documentais como a última opção da navegação.
+        if usuario_tem("view_transferencias"):
             if st.button(
-                "Elfen AI",
+                "Processos de Transferência",
                 use_container_width=True,
-                type="primary" if pagina == "elfen_ai" else "secondary",
+                type=(
+                    "primary"
+                    if pagina in {"documentos", "transferencias"}
+                    else "secondary"
+                ),
             ):
-                st.session_state["pagina_atual"] = "elfen_ai"
+                st.session_state["pagina_atual"] = "transferencias"
+                st.session_state["abrir_formulario"] = False
                 st.rerun()
 
 
@@ -3315,7 +3463,7 @@ def mostrar_formulario_novo_lead(
         banco_correntista = None
 
         if gerou_ficha:
-            st.markdown("### Dados da ficha")
+            st.markdown("### 📝 Dados da ficha")
             col_ficha_1, col_ficha_2 = st.columns(2)
 
             with col_ficha_1:
@@ -3438,7 +3586,7 @@ def mostrar_formulario_novo_lead(
                 accept_multiple_files=True,
                 help=(
                     "Você poderá adicionar outros documentos depois. "
-                    "Eles ficarão disponíveis para o documentista e a Elfen AI."
+                    "Eles ficarão disponíveis para o documentista."
                 ),
             )
 
@@ -3696,6 +3844,14 @@ def mostrar_card_lead(
             f"{row.get('nome_vendedor') or 'Não atribuído'}"
         )
         st.write(f"**Telefone:** {row.get('telefone') or '-'}")
+        link_whatsapp = gerar_link_whatsapp(row.get("telefone"))
+        if link_whatsapp:
+            st.link_button(
+                "WhatsApp",
+                link_whatsapp,
+                icon="💬",
+                use_container_width=True,
+            )
         st.write(
             f"**Data do lead:** "
             f"{formatar_data_br(row.get('data_lead'))}"
@@ -3774,6 +3930,18 @@ def mostrar_card_lead(
             st.caption(
                 "Atualizado em: "
                 f"{formatar_data_br(atualizado, incluir_hora=True)}"
+            )
+
+        transferido_em = row.get("ultima_transferencia_em")
+        if pd.notna(transferido_em):
+            st.caption(
+                f"Transferido de "
+                f"'{row.get('ultima_transferencia_origem') or 'Sem vendedor'}' "
+                f"para "
+                f"'{row.get('ultima_transferencia_destino') or 'Sem vendedor'}' "
+                f"por: "
+                f"'{row.get('ultima_transferencia_por') or 'Gerente'}' "
+                f"em: {formatar_data_br(transferido_em, incluir_hora=True)}"
             )
 
 
@@ -4692,6 +4860,31 @@ def pagina_documentista(usuario: Dict[str, Any]) -> None:
                         ),
                         format_func=lambda valor: nomes_status[valor],
                     )
+                    etapa_1, etapa_2, etapa_3 = st.columns(3)
+                    reconheceu_firma = etapa_1.checkbox(
+                        "Reconheceu firma",
+                        value=bool(
+                            ficha.get(
+                                "transferencia_reconheceu_firma",
+                                False,
+                            )
+                        ),
+                    )
+                    gravame = etapa_2.checkbox(
+                        "Gravame",
+                        value=bool(
+                            ficha.get("transferencia_gravame", False)
+                        ),
+                    )
+                    documento_pronto = etapa_3.checkbox(
+                        "Documento pronto",
+                        value=bool(
+                            ficha.get(
+                                "transferencia_documento_pronto",
+                                False,
+                            )
+                        ),
+                    )
                     nova_observacao = st.text_area(
                         "Observação",
                         value=str(
@@ -4713,11 +4906,27 @@ def pagina_documentista(usuario: Dict[str, Any]) -> None:
                         ficha,
                         novo_status,
                         nova_observacao,
+                        reconheceu_firma,
+                        gravame,
+                        documento_pronto,
                     )
             else:
                 st.info(
                     f"Situação: {status_label}. "
                     "Somente gerente e documentista podem alterar."
+                )
+                etapa_1, etapa_2, etapa_3 = st.columns(3)
+                etapa_1.write(
+                    "**Reconheceu firma:** "
+                    f"{'Sim' if ficha.get('transferencia_reconheceu_firma') else 'Não'}"
+                )
+                etapa_2.write(
+                    "**Gravame:** "
+                    f"{'Sim' if ficha.get('transferencia_gravame') else 'Não'}"
+                )
+                etapa_3.write(
+                    "**Documento pronto:** "
+                    f"{'Sim' if ficha.get('transferencia_documento_pronto') else 'Não'}"
                 )
 
 
@@ -5863,7 +6072,7 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
 
             if usuario["tipo"] == "elfen_ai":
                 st.caption(
-                    "A Elfen AI vê apenas os dados cadastrais, "
+                    "Este perfil vê apenas os dados cadastrais, "
                     "o status da ficha e os resultados dos bancos."
                 )
             elif pode_ver_financeiro:
@@ -6034,14 +6243,6 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                 100,
             )
             st.rerun()
-
-
-def pagina_elfen_ai() -> None:
-    if not usuario_tem("use_elfen_ai"):
-        st.error("Você não tem permissão para acessar a Elfen AI.")
-        return
-
-    pagina_fichas(st.session_state["usuario_logado"])
 
 
 @st.cache_data(ttl=20, show_spinner=False)
@@ -7096,9 +7297,6 @@ if usuario_tem("view_team"):
 if usuario_tem("use_chat"):
     paginas_permitidas.add("chat")
 
-if usuario_tem("use_elfen_ai"):
-    paginas_permitidas.add("elfen_ai")
-
 if usuario_tem("view_credit_fichas"):
     paginas_permitidas.add("fichas")
 
@@ -7128,8 +7326,6 @@ elif pagina_atual == "vendedores":
     pagina_vendedores(usuario_atual)
 elif pagina_atual == "chat":
     pagina_chat(usuario_atual)
-elif pagina_atual == "elfen_ai":
-    pagina_elfen_ai()
 elif pagina_atual == "fichas":
     pagina_fichas(usuario_atual)
 elif pagina_atual == "tarefas":
