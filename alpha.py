@@ -1019,7 +1019,6 @@ BANCOS_CREDITO = [
 ]
 
 
-@st.cache_data(ttl=20, show_spinner=False)
 def contar_notificacoes_nao_lidas(usuario_id: int) -> int:
     query = text(
         """
@@ -1117,7 +1116,7 @@ def criar_notificacao_nova_ficha(
     conn: Any,
 ) -> None:
     """
-    Avisa o vendedor responsável e todos os gerentes ativos.
+    Avisa o vendedor responsável, gerentes e usuários do ElfenAI ativos.
     Assim a ficha pendente não depende de alguém abrir a tela.
     """
     if not vendedor_id:
@@ -1145,12 +1144,18 @@ def criar_notificacao_nova_ficha(
             WHERE COALESCE(u.ativo, TRUE) = TRUE
               AND (
                     {filtro_vendedor}
-                    OR LOWER(REPLACE(u.tipo, '-', '_')) IN (
+                    OR REGEXP_REPLACE(
+                        LOWER(COALESCE(u.tipo, '')),
+                        '[^a-z0-9]',
+                        '',
+                        'g'
+                    ) IN (
                         'gerente',
                         'admin',
                         'administrador',
                         'dono',
-                        'owner'
+                        'owner',
+                        'elfenai'
                     )
               )
             """
@@ -1630,7 +1635,28 @@ def obter_fichas_credito(
             l.nome_lead,
             l.nome_completo,
             l.cpf,
+            l.rg,
+            l.nome_pai,
+            l.nome_mae,
             l.data_nascimento,
+            l.data_expedicao,
+            l.orgao_expeditor,
+            l.email,
+            l.endereco,
+            l.bairro,
+            l.cidade,
+            l.estado,
+            l.cep,
+            l.empresa,
+            l.cnpj,
+            l.endereco_empresa,
+            l.bairro_empresa,
+            l.cidade_empresa,
+            l.estado_empresa,
+            l.cep_empresa,
+            l.tempo_carreira,
+            l.salario,
+            l.banco_correntista,
             l.habilitado,
             l.produto_interesse,
             l.carro_selecionado,
@@ -2438,7 +2464,7 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
         nova_placa_carro = None
         novo_valor_carro = None
         if gerou_ficha:
-            st.markdown("### 🚗 Veículo da ficha")
+            st.markdown("### Veículo da ficha")
             ficha_col_1, ficha_col_2 = st.columns(2)
             with ficha_col_1:
                 novo_carro_selecionado = st.text_input(
@@ -2836,6 +2862,13 @@ def mostrar_formulario_novo_lead(
         st.warning("Nenhum vendedor ativo foi encontrado.")
         return
 
+    # Fora do formulário para que os campos da ficha apareçam imediatamente
+    # quando a opção for marcada.
+    gerou_ficha = st.checkbox(
+        "Gerar ficha de crédito",
+        key="gerou_ficha_novo_lead",
+    )
+
     with st.form("form_novo_lead", clear_on_submit=False):
         col1, col2 = st.columns(2)
 
@@ -2859,13 +2892,37 @@ def mostrar_formulario_novo_lead(
             data_lead = st.date_input("Data que o lead chegou*")
             venda_concluida = st.checkbox("Venda concluída?")
 
-        gerou_ficha = st.checkbox("Gerou ficha")
-
         cpf = None
         data_nascimento = None
         habilitado = None
         valor_entrada = None
         anexos_ficha = []
+        nome_completo = ""
+        carro_selecionado = ""
+        placa_carro = ""
+        ano_carro = None
+        valor_carro = 0.0
+        nome_pai = None
+        nome_mae = None
+        rg = None
+        data_expedicao = None
+        orgao_expeditor = None
+        empresa = None
+        cnpj = None
+        endereco_empresa = None
+        bairro_empresa = None
+        cidade_empresa = None
+        estado_empresa = None
+        cep_empresa = None
+        endereco = None
+        bairro = None
+        cidade = None
+        estado = None
+        cep = None
+        email = None
+        tempo_carreira = None
+        salario = None
+        banco_correntista = None
 
         if gerou_ficha:
             st.markdown("### 📝 Dados da ficha")
@@ -2911,6 +2968,63 @@ def mostrar_formulario_novo_lead(
                     min_value=0.0,
                     step=1000.0,
                 )
+
+            st.markdown("#### Dados pessoais e endereço residencial")
+            col_pessoal_1, col_pessoal_2 = st.columns(2)
+            with col_pessoal_1:
+                nome_pai = st.text_input("Nome do pai")
+                rg = st.text_input("RG")
+                orgao_expeditor = st.text_input("Órgão expedidor")
+                email = st.text_input("E-mail")
+                endereco = st.text_input("Endereço residencial")
+                bairro = st.text_input("Bairro residencial")
+            with col_pessoal_2:
+                nome_mae = st.text_input("Nome da mãe")
+                data_expedicao = st.text_input(
+                    "Data de expedição do RG",
+                    placeholder="DD/MM/AAAA",
+                )
+                cidade = st.text_input("Cidade residencial")
+                estado = st.text_input("Estado residencial", max_chars=2)
+                cep = st.text_input(
+                    "CEP residencial",
+                    placeholder="00000-000",
+                    max_chars=9,
+                )
+
+            st.markdown("#### Dados da empresa")
+            col_empresa_1, col_empresa_2 = st.columns(2)
+            with col_empresa_1:
+                empresa = st.text_input("Nome da empresa")
+                cnpj = st.text_input("CNPJ")
+                endereco_empresa = st.text_input("Endereço da empresa")
+                bairro_empresa = st.text_input("Bairro da empresa")
+            with col_empresa_2:
+                cidade_empresa = st.text_input("Cidade da empresa")
+                estado_empresa = st.text_input(
+                    "Estado da empresa",
+                    max_chars=2,
+                )
+                cep_empresa = st.text_input(
+                    "CEP da empresa",
+                    placeholder="00000-000",
+                    max_chars=9,
+                )
+                tempo_carreira = st.text_input(
+                    "Tempo de trabalho na empresa",
+                    placeholder="Ex.: 3 anos",
+                )
+
+            col_trabalho_1, col_trabalho_2 = st.columns(2)
+            with col_trabalho_1:
+                salario = st.number_input(
+                    "Salário mensal",
+                    min_value=0.0,
+                    step=100.0,
+                )
+            with col_trabalho_2:
+                banco_correntista = st.text_input("Banco correntista")
+
             anexos_ficha = st.file_uploader(
                 "Documentos da ficha",
                 type=[
@@ -2934,7 +3048,7 @@ def mostrar_formulario_novo_lead(
         observacao = st.text_area("Observações gerais")
 
         salvar = st.form_submit_button(
-            "Salvar lead",
+            "Gerar ficha e salvar lead" if gerou_ficha else "Salvar lead",
             use_container_width=True,
             type="primary",
         )
@@ -2987,7 +3101,28 @@ def mostrar_formulario_novo_lead(
                 valor_entrada,
                 observacao,
                 created_at,
-                updated_at
+                updated_at,
+                nome_pai,
+                nome_mae,
+                rg,
+                data_expedicao,
+                orgao_expeditor,
+                empresa,
+                cnpj,
+                endereco_empresa,
+                bairro_empresa,
+                cidade_empresa,
+                estado_empresa,
+                cep_empresa,
+                endereco,
+                bairro,
+                cidade,
+                estado,
+                cep,
+                email,
+                tempo_carreira,
+                salario,
+                banco_correntista
             )
             VALUES (
                 :nome,
@@ -3009,7 +3144,28 @@ def mostrar_formulario_novo_lead(
                 :valor_entrada,
                 :observacao,
                 NOW(),
-                NOW()
+                NOW(),
+            :nome_pai,
+            :nome_mae,
+            :rg,
+            :data_expedicao,
+            :orgao_expeditor,
+            :empresa,
+            :cnpj,
+            :endereco_empresa,
+            :bairro_empresa,
+            :cidade_empresa,
+            :estado_empresa,
+                :cep_empresa,
+            :endereco,
+            :bairro,
+            :cidade,
+            :estado,
+                :cep,
+            :email,
+            :tempo_carreira,
+            :salario,
+            :banco_correntista
             )
             RETURNING id
             """
@@ -3061,6 +3217,105 @@ def mostrar_formulario_novo_lead(
                         if observacao.strip()
                         else None
                     ),
+                    "nome_pai": (
+                        nome_pai.strip()
+                        if gerou_ficha and nome_pai
+                        else None
+                        ),
+                    "nome_mae": (
+                        nome_mae.strip()
+                        if gerou_ficha and nome_mae
+                        else None
+                        ),
+                    "rg": (
+                        rg
+                        if gerou_ficha and rg
+                        else None
+                        ),
+                    "data_expedicao": (
+                        data_expedicao
+                        if gerou_ficha and data_expedicao
+                        else None),
+                    "orgao_expeditor": (
+                        orgao_expeditor.strip()
+                        if gerou_ficha and orgao_expeditor
+                        else None
+                        ),
+                    "empresa": (
+                        empresa.strip()
+                        if gerou_ficha and empresa
+                        else None
+                        ),
+                    "cnpj": (cnpj.strip()
+                    if gerou_ficha and cnpj
+                    else None
+                    ),
+                    "endereco_empresa":(
+                        endereco_empresa.strip()
+                        if gerou_ficha and endereco_empresa
+                        else None
+                        ),
+                    "bairro_empresa":(
+                        bairro_empresa.strip()
+                        if gerou_ficha and bairro_empresa
+                        else None
+                        ),
+                    "cidade_empresa":(
+                        cidade_empresa.strip()
+                        if gerou_ficha and cidade_empresa
+                        else None
+                        ),
+                    "estado_empresa":(
+                        estado_empresa.strip()
+                        if gerou_ficha and estado_empresa
+                        else None
+                        ),
+                    "cep_empresa":(
+                        cep_empresa.strip()
+                        if gerou_ficha and cep_empresa
+                        else None
+                        ),
+                    "endereco":(
+                        endereco.strip()
+                        if gerou_ficha and endereco
+                        else None
+                        ),
+                    "bairro":(
+                        bairro.strip()
+                        if gerou_ficha and bairro
+                        else None
+                        ),
+                    "cidade":(cidade.strip()
+                    if gerou_ficha and cidade
+                    else None),
+                    "estado":(
+                        estado.strip()
+                        if gerou_ficha and estado
+                        else None
+                        ),
+                    "cep":(
+                        cep.strip()
+                        if gerou_ficha and cep
+                        else None
+                        ),
+                    "email":(
+                        email.strip()
+                        if gerou_ficha and email
+                        else None
+                        ),
+                    "tempo_carreira":(
+                        tempo_carreira.strip()
+                        if gerou_ficha and tempo_carreira
+                        else None
+                        ),
+                    "salario":(
+                        salario
+                        if gerou_ficha and salario
+                        else None),
+                    "banco_correntista":(
+                        banco_correntista.strip()
+                        if gerou_ficha and banco_correntista else None
+                        ),
                 },
             ).scalar_one()
 
@@ -4803,6 +5058,72 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
             col_veiculo_3.write(
                 f"**Valor do carro:** "
                 f"R$ {numero_seguro(ficha.get('valor_carro')):,.2f}"
+            )
+
+            def texto_cadastro(campo: str) -> str:
+                valor = ficha.get(campo)
+                if valor is None or pd.isna(valor) or not str(valor).strip():
+                    return "-"
+                return str(valor).strip()
+
+            st.markdown("#### Contato e dados pessoais")
+            col_contato_1, col_contato_2, col_contato_3 = st.columns(3)
+            col_contato_1.write(
+                f"**Telefone:** {texto_cadastro('telefone')}"
+            )
+            col_contato_2.write(f"**E-mail:** {texto_cadastro('email')}")
+            col_contato_3.write(f"**RG:** {texto_cadastro('rg')}")
+            col_familia_1, col_familia_2, col_familia_3 = st.columns(3)
+            col_familia_1.write(
+                f"**Nome do pai:** {texto_cadastro('nome_pai')}"
+            )
+            col_familia_2.write(
+                f"**Nome da mãe:** {texto_cadastro('nome_mae')}"
+            )
+            col_familia_3.write(
+                f"**Órgão expedidor:** "
+                f"{texto_cadastro('orgao_expeditor')}"
+            )
+            st.write(
+                f"**Expedição do RG:** "
+                f"{texto_cadastro('data_expedicao')}"
+            )
+
+            st.markdown("#### Endereço residencial")
+            st.write(
+                f"**Endereço:** {texto_cadastro('endereco')} · "
+                f"**Bairro:** {texto_cadastro('bairro')} · "
+                f"**Cidade/UF:** {texto_cadastro('cidade')}/"
+                f"{texto_cadastro('estado')} · "
+                f"**CEP:** {texto_cadastro('cep')}"
+            )
+
+            st.markdown("#### Trabalho e dados da empresa")
+            col_empresa_1, col_empresa_2, col_empresa_3 = st.columns(3)
+            col_empresa_1.write(
+                f"**Empresa:** {texto_cadastro('empresa')}"
+            )
+            col_empresa_2.write(f"**CNPJ:** {texto_cadastro('cnpj')}")
+            col_empresa_3.write(
+                f"**Banco correntista:** "
+                f"{texto_cadastro('banco_correntista')}"
+            )
+            st.write(
+                f"**Endereço da empresa:** "
+                f"{texto_cadastro('endereco_empresa')} · "
+                f"**Bairro:** {texto_cadastro('bairro_empresa')} · "
+                f"**Cidade/UF:** {texto_cadastro('cidade_empresa')}/"
+                f"{texto_cadastro('estado_empresa')} · "
+                f"**CEP:** {texto_cadastro('cep_empresa')}"
+            )
+            col_trabalho_1, col_trabalho_2 = st.columns(2)
+            col_trabalho_1.write(
+                f"**Tempo de trabalho:** "
+                f"{texto_cadastro('tempo_carreira')}"
+            )
+            col_trabalho_2.write(
+                f"**Salário mensal:** "
+                f"R$ {numero_seguro(ficha.get('salario')):,.2f}"
             )
 
             pode_editar_dados = (
