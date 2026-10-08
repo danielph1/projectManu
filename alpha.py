@@ -9128,6 +9128,7 @@ def pagina_oficina(usuario: Dict[str, Any]) -> None:
                     ano_modelo,
                     placa,
                     cor,
+                    onde_esta,
                 )
 
     aba_lista, aba_pesquisa = st.tabs(["Carros", "Pesquisar"])
