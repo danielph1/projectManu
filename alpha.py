@@ -83,31 +83,132 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ---------------------------------------------------------------------------
-# CORES DO APP (altere aqui se quiser outro tema visual)
-# ---------------------------------------------------------------------------
-# --cor-fundo:        #0e1117   (fundo geral)
-# --cor-sidebar:      #262730   (barra lateral)
-# --cor-primaria:     #ff4b4b   (botões ativos / destaque)
-# --cor-sucesso:      #21c35e   (aprovado / pronto)
-# --cor-aviso:        #f0ad4e   (pendente)
-# --cor-erro:         #ff4b4b   (negado)
-# --cor-texto:        #fafafa   (texto principal)
-# --cor-borda:        #3a3b45   (bordas de cards)
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# TEMA VISUAL — altere os valores HEX abaixo para mudar as cores do app.
+# Depois de mudar, salve e recarregue a página (Ctrl+R / F5).
+# ===========================================================================
+COR_FUNDO       = "#0b0f14"   # fundo geral da página
+COR_SIDEBAR     = "#121820"   # barra lateral
+COR_CARD        = "#161d27"   # cards / expanders
+COR_BORDA       = "#243041"   # bordas sutis
+COR_PRIMARIA    = "#3b82f6"   # botão ativo / destaque (azul, sem laranja)
+COR_PRIMARIA_2  = "#2563eb"   # hover do botão ativo
+COR_SUCESSO     = "#22c55e"   # aprovado / pronto
+COR_AVISO       = "#eab308"   # pendente
+COR_ERRO        = "#ef4444"   # negado / sair
+COR_TEXTO       = "#e8eef7"   # texto principal
+COR_TEXTO_MUTED = "#94a3b8"   # legendas / secundário
+COR_INPUT       = "#1a2330"   # campos de formulário
+
 st.markdown(
-    """
+    f"""
     <style>
-    /* Remove a coroa / menu hamburger do Streamlit e o rodapé "Made with Streamlit" */
-    #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
-    footer {visibility: hidden;}
-    [data-testid="stToolbar"] {display: none !important;}
-    [data-testid="stDecoration"] {display: none !important;}
-    [data-testid="stStatusWidget"] {display: none !important;}
-    .stDeployButton {display: none !important;}
-    /* Remove o link do GitHub / perfil no canto inferior */
-    a[href*="github.com"] {display: none !important;}
+    /* ---- esconde chrome do Streamlit (menu, rodapé, Manage app, GitHub) ---- */
+    #MainMenu, header, footer {{visibility: hidden !important; height: 0 !important;}}
+    [data-testid="stToolbar"],
+    [data-testid="stDecoration"],
+    [data-testid="stStatusWidget"],
+    .stDeployButton,
+    [data-testid="stAppDeployButton"],
+    div[data-testid="stBottomBlockContainer"] a,
+    a[href*="github.com"],
+    a[href*="streamlit.io"],
+    .viewerBadge_container__1QSob,
+    .viewerBadge_link__1SLeB,
+    .viewerBadge_text__1JaDK {{
+        display: none !important;
+        visibility: hidden !important;
+    }}
+
+    /* ---- variáveis de cor (usadas no restante do CSS) ---- */
+    :root {{
+        --cor-fundo: {COR_FUNDO};
+        --cor-sidebar: {COR_SIDEBAR};
+        --cor-card: {COR_CARD};
+        --cor-borda: {COR_BORDA};
+        --cor-primaria: {COR_PRIMARIA};
+        --cor-primaria-2: {COR_PRIMARIA_2};
+        --cor-sucesso: {COR_SUCESSO};
+        --cor-aviso: {COR_AVISO};
+        --cor-erro: {COR_ERRO};
+        --cor-texto: {COR_TEXTO};
+        --cor-texto-muted: {COR_TEXTO_MUTED};
+        --cor-input: {COR_INPUT};
+    }}
+
+    .stApp {{
+        background-color: var(--cor-fundo) !important;
+        color: var(--cor-texto) !important;
+    }}
+    [data-testid="stSidebar"] {{
+        background-color: var(--cor-sidebar) !important;
+        border-right: 1px solid var(--cor-borda) !important;
+    }}
+    [data-testid="stSidebar"] * {{
+        color: var(--cor-texto) !important;
+    }}
+
+    /* botão primary = cor de destaque */
+    div.stButton > button[kind="primary"],
+    button[data-testid="baseButton-primary"] {{
+        background-color: var(--cor-primaria) !important;
+        border-color: var(--cor-primaria) !important;
+        color: #fff !important;
+    }}
+    div.stButton > button[kind="primary"]:hover,
+    button[data-testid="baseButton-primary"]:hover {{
+        background-color: var(--cor-primaria-2) !important;
+        border-color: var(--cor-primaria-2) !important;
+    }}
+
+    /* cards / expanders */
+    [data-testid="stExpander"] {{
+        background: var(--cor-card) !important;
+        border: 1px solid var(--cor-borda) !important;
+        border-radius: 12px !important;
+    }}
+
+    /* inputs */
+    .stTextInput input, .stNumberInput input, .stSelectbox div[data-baseweb="select"] > div,
+    .stTextArea textarea, .stDateInput input {{
+        background-color: var(--cor-input) !important;
+        color: var(--cor-texto) !important;
+        border-color: var(--cor-borda) !important;
+    }}
+
+    /* reações compactas no chat */
+    .chat-reacao-resumo {{
+        display: inline-flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-top: 4px;
+        font-size: 0.9rem;
+        color: var(--cor-texto-muted);
+    }}
+    .chat-reacao-chip {{
+        background: var(--cor-card);
+        border: 1px solid var(--cor-borda);
+        border-radius: 999px;
+        padding: 2px 8px;
+    }}
+
+    /* cards de vendedor (equipe) */
+    .vendedor-card {{
+        background: var(--cor-card);
+        border: 1px solid var(--cor-borda);
+        border-radius: 14px;
+        padding: 14px 16px;
+        margin-bottom: 10px;
+        min-height: 120px;
+    }}
+    .vendedor-card h4 {{
+        margin: 0 0 6px 0;
+        color: var(--cor-texto);
+    }}
+    .vendedor-card .muted {{
+        color: var(--cor-texto-muted);
+        font-size: 0.85rem;
+    }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -129,14 +230,24 @@ st.markdown(
 # documento   -> documentista
 #
 
+# ---------------------------------------------------------------------------
+# ROLE_ALIASES: nomes gravados no banco → nome interno único.
+# admin / marketing = poder GLOBAL
+# gerente           = poder limitado à LOJA do usuário
+# ---------------------------------------------------------------------------
 ROLE_ALIASES = {
-    "admin": "gerente",
-    "administrador": "gerente",
+    # Poder global
+    "admin": "admin",
+    "administrador": "admin",
+    "dono": "admin",
+    "proprietario": "admin",
+    "proprietário": "admin",
+    "owner": "admin",
+    # marketing = admin por enquanto (futuro: perfil próprio)
+    "marketing": "admin",
+    # Poder por loja
     "gerente": "gerente",
-    "dono": "gerente",
-    "proprietario": "gerente",
-    "proprietário": "gerente",
-    "owner": "gerente",
+    # Demais perfis
     "vendedor": "vendedor",
     "elfenai": "elfen_ai",
     "elfen ai": "elfen_ai",
@@ -216,9 +327,12 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "edit_own_credit_data",
         "view_oficina",
     },
+    # admin = poder global (todas as lojas)
+    "admin": {
+        "*",
+    },
+    # gerente = mesmas telas, mas o SQL filtra pela loja do usuário
     "gerente": {
-        # O gerente é o superadministrador operacional da loja.
-        # A função usuario_tem() trata "*" como acesso total.
         "*",
     },
     "elfen_ai": {
@@ -301,7 +415,24 @@ def usuario_tem(permissao: str) -> bool:
 
 
 def usuario_e_gerente() -> bool:
+    """Gerente de loja (escopo local)."""
     return st.session_state.get("usuario_logado", {}).get("tipo") == "gerente"
+
+
+def usuario_e_admin() -> bool:
+    """Admin / marketing / dono — poder global em todas as lojas."""
+    return st.session_state.get("usuario_logado", {}).get("tipo") == "admin"
+
+
+def usuario_e_gestor() -> bool:
+    """Admin ou gerente (qualquer um que gerencia operação)."""
+    return usuario_e_admin() or usuario_e_gerente()
+
+
+def loja_do_usuario() -> str:
+    return normalizar_loja(
+        st.session_state.get("usuario_logado", {}).get("loja", "381")
+    )
 
 
 # ============================================================
@@ -469,7 +600,7 @@ def autenticar(login_input: str, senha_input: str) -> bool:
             "tipo_original": result["tipo"],
             "vendedor_id": result["vendedor_id"],
             "loja": normalizar_loja(result.get("loja", "381")),
-            "is_admin": tipo == "gerente",
+            "is_admin": tipo in {"admin", "gerente"},
         }
 
         salvar_sessao(st.session_state["usuario_logado"])
@@ -568,8 +699,21 @@ def escopo_leads(usuario: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
             "scope_vendedor_id": usuario["vendedor_id"],
         }
 
-    if tipo == "gerente":
+    # admin / marketing: vê tudo
+    if tipo == "admin":
         return "TRUE", {}
+
+    # gerente: só leads de vendedores da mesma loja
+    if tipo == "gerente":
+        return """
+            (
+                l.vendedor_id IN (
+                    SELECT v.id FROM public.vendedores v
+                    WHERE UPPER(COALESCE(v.loja, '381')) = UPPER(:scope_loja)
+                )
+                OR l.vendedor_id IS NULL
+            )
+        """, {"scope_loja": normalizar_loja(usuario.get("loja", "381"))}
 
     if tipo == "elfen_ai":
         return "TRUE", {}
@@ -595,7 +739,7 @@ def escopo_leads(usuario: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
 
 
 def pode_editar_lead(lead: pd.Series, usuario: Dict[str, Any]) -> bool:
-    if usuario["tipo"] == "gerente":
+    if usuario["tipo"] in {"admin", "gerente"}:
         return True
 
     return (
@@ -606,7 +750,7 @@ def pode_editar_lead(lead: pd.Series, usuario: Dict[str, Any]) -> bool:
 
 
 def pode_deletar_lead(lead: pd.Series, usuario: Dict[str, Any]) -> bool:
-    if usuario["tipo"] == "gerente":
+    if usuario["tipo"] in {"admin", "gerente"}:
         return True
 
     return (
@@ -1824,17 +1968,32 @@ def obter_fichas_credito(
     busca: str = "",
     banco_filtro: Optional[str] = None,
     limite: int = 24,
+    data_inicio: Optional[date] = None,
+    data_fim: Optional[date] = None,
 ) -> pd.DataFrame:
     if usuario["tipo"] == "vendedor":
         filtro_acesso = "f.vendedor_id = :vendedor_id"
         parametros: Dict[str, Any] = {
             "vendedor_id": usuario.get("vendedor_id")
         }
+    elif usuario["tipo"] == "gerente":
+        # Gerente: só fichas de vendedores da sua loja
+        filtro_acesso = """
+            f.vendedor_id IN (
+                SELECT v.id FROM public.vendedores v
+                WHERE UPPER(COALESCE(v.loja, '381')) = UPPER(:scope_loja)
+            )
+        """
+        parametros = {"scope_loja": normalizar_loja(usuario.get("loja", "381"))}
     else:
         filtro_acesso = "TRUE"
         parametros = {}
 
-    pode_ver_financeiro = usuario["tipo"] in {"financeiro", "gerente", "elfen_ai"} or usuario_tem("view_financial") or usuario_tem("edit_sales_boleto")
+    pode_ver_financeiro = (
+        usuario["tipo"] in {"financeiro", "gerente", "admin", "elfen_ai"}
+        or usuario_tem("view_financial")
+        or usuario_tem("edit_sales_boleto")
+    )
     campos_financeiros = """
             f.valor_entrada,
             f.comprou,
@@ -1902,6 +2061,15 @@ def obter_fichas_credito(
             "banco_filtro": banco_filtro,
         }
     )
+
+    # Filtro de período (created_at da ficha)
+    filtro_periodo = "TRUE"
+    if data_inicio is not None:
+        filtro_periodo = f"({filtro_periodo}) AND f.created_at >= :f_data_inicio"
+        parametros["f_data_inicio"] = data_inicio
+    if data_fim is not None:
+        filtro_periodo = f"({filtro_periodo}) AND f.created_at < :f_data_fim"
+        parametros["f_data_fim"] = data_fim + timedelta(days=1)
 
     ordem_fichas = (
         """
@@ -1973,6 +2141,7 @@ def obter_fichas_credito(
           AND ({filtro_status})
           AND ({filtro_busca})
           AND ({filtro_banco})
+          AND ({filtro_periodo})
         ORDER BY {ordem_fichas}
         LIMIT :limite
         """
@@ -2664,31 +2833,47 @@ def salvar_dados_cadastrais_ficha(
 
 
 @st.cache_data(ttl=30, show_spinner=False)
-def obter_metricas_credito() -> tuple[pd.DataFrame, Dict[str, Any]]:
+def obter_metricas_credito(
+    data_inicio: Optional[date] = None,
+    data_fim: Optional[date] = None,
+) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    """Métricas de fichas; opcionalmente filtradas por created_at."""
+    filtros_f = ["TRUE"]
+    params: Dict[str, Any] = {}
+    if data_inicio is not None:
+        filtros_f.append("f.created_at >= :m_data_inicio")
+        params["m_data_inicio"] = data_inicio
+    if data_fim is not None:
+        filtros_f.append("f.created_at < :m_data_fim")
+        params["m_data_fim"] = data_fim + timedelta(days=1)
+    where_f = " AND ".join(filtros_f)
+
     query_bancos = text(
-        """
+        f"""
         SELECT
-            banco,
-            COUNT(DISTINCT ficha_id) AS fichas_analisadas,
-            COUNT(*) FILTER (WHERE status = 'aprovado')
+            b.banco,
+            COUNT(DISTINCT b.ficha_id) AS fichas_analisadas,
+            COUNT(*) FILTER (WHERE b.status = 'aprovado')
                 AS total_aprovados,
-            COUNT(*) FILTER (WHERE status = 'negado')
+            COUNT(*) FILTER (WHERE b.status = 'negado')
                 AS total_negados,
-            COUNT(*) FILTER (WHERE status = 'pendente')
+            COUNT(*) FILTER (WHERE b.status = 'pendente')
                 AS total_pendentes,
             ROUND(
-                100.0 * COUNT(*) FILTER (WHERE status = 'aprovado')
+                100.0 * COUNT(*) FILTER (WHERE b.status = 'aprovado')
                 / NULLIF(COUNT(*), 0),
                 2
             ) AS taxa_aprovacao
-        FROM public.ficha_bancos
-        GROUP BY banco
+        FROM public.ficha_bancos b
+        JOIN public.fichas_credito f ON f.id = b.ficha_id
+        WHERE {where_f}
+        GROUP BY b.banco
         ORDER BY total_aprovados DESC, taxa_aprovacao DESC
         """
     )
 
     query_geral = text(
-        """
+        f"""
         SELECT
             COUNT(*) AS total_fichas,
             COUNT(*) FILTER (WHERE status_geral = 'aprovada')
@@ -2720,13 +2905,14 @@ def obter_metricas_credito() -> tuple[pd.DataFrame, Dict[str, Any]]:
                   AND gerou_boleto = TRUE
                   AND valor_pendente > 0
             ) AS clientes_com_valor_pendente
-        FROM public.fichas_credito
+        FROM public.fichas_credito f
+        WHERE {where_f}
         """
     )
 
     with engine.connect() as conn:
-        por_banco = pd.read_sql_query(query_bancos, conn)
-        geral = conn.execute(query_geral).mappings().first()
+        por_banco = pd.read_sql_query(query_bancos, conn, params=params)
+        geral = conn.execute(query_geral, params).mappings().first()
 
     return por_banco, dict(geral or {})
 
@@ -3519,7 +3705,10 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
         st.markdown(
             f"### 👤 Logado como\n**{usuario['nome']}**"
         )
-        st.caption(f"Perfil: {usuario['tipo'].upper()}")
+        st.caption(
+            f"Perfil: {usuario['tipo'].upper()}  ·  "
+            f"Loja: {normalizar_loja(usuario.get('loja', '381'))}"
+        )
 
         if st.button("Sair", use_container_width=True):
             limpar_sessao()
@@ -3609,6 +3798,15 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
             ):
                 st.session_state["pagina_atual"] = "fichas"
                 st.session_state["abrir_formulario"] = False
+                st.rerun()
+
+        if usuario_e_gestor() or usuario.get("tipo") == "vendedor":
+            if st.button(
+                "WhatsApp",
+                use_container_width=True,
+                type="primary" if pagina == "whatsapp" else "secondary",
+            ):
+                st.session_state["pagina_atual"] = "whatsapp"
                 st.rerun()
 
         if usuario_tem("view_oficina"):
@@ -5234,7 +5432,7 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
     # ------------------------------------------------------------------
     # Transferência em massa de leads (somente gerente/admin)
     # ------------------------------------------------------------------
-    if usuario_e_gerente():
+    if usuario_e_gestor():
         with st.expander("🔀 Transferir leads entre vendedores", expanded=False):
             df_vend = obter_vendedores()
             if df_vend.empty:
@@ -5396,6 +5594,39 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
                                             "por_nome": usuario.get("nome") or "",
                                         },
                                     )
+                                    # Notifica o vendedor que RECEBEU o lead
+                                    dest_user = conn.execute(
+                                        text(
+                                            """
+                                            SELECT id FROM public.usuarios
+                                            WHERE vendedor_id = :vid
+                                              AND COALESCE(ativo, TRUE) = TRUE
+                                            ORDER BY id LIMIT 1
+                                            """
+                                        ),
+                                        {"vid": dest},
+                                    ).mappings().first()
+                                    if dest_user:
+                                        conn.execute(
+                                            text(
+                                                """
+                                                INSERT INTO public.notificacoes (
+                                                    usuario_id, tipo, titulo, mensagem
+                                                ) VALUES (
+                                                    :uid, 'transferencia_lead',
+                                                    :titulo, :mensagem
+                                                )
+                                                """
+                                            ),
+                                            {
+                                                "uid": dest_user["id"],
+                                                "titulo": "Lead transferido para você",
+                                                "mensagem": (
+                                                    f"Você recebeu um lead "
+                                                    f"(origem: {nome_origem})."
+                                                ),
+                                            },
+                                        )
                                     movidos += 1
                                 st.success(f"{movidos} lead(s) transferidos.")
                                 st.cache_data.clear()
@@ -5445,21 +5676,30 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
 
     col_filtro_1, col_filtro_2 = st.columns(2)
     with col_filtro_1:
+        # Padrão: este mês. A contagem de leads/métricas usa o mesmo intervalo.
         periodo_opcoes = [
-            "todos",
             "mes_atual",
             "mes_anterior",
             "personalizado",
+            "todos",
         ]
+        if "leads_periodo" not in st.session_state:
+            st.session_state["leads_periodo"] = "mes_atual"
         periodo = st.selectbox(
             "Período da data do lead",
             periodo_opcoes,
+            index=periodo_opcoes.index(
+                st.session_state.get("leads_periodo", "mes_atual")
+            )
+            if st.session_state.get("leads_periodo", "mes_atual") in periodo_opcoes
+            else 0,
             format_func=lambda valor: {
                 "todos": "Todas as datas",
                 "mes_atual": "Este mês",
                 "mes_anterior": "Mês anterior",
                 "personalizado": "Escolher período",
             }[valor],
+            key="leads_periodo",
         )
 
     data_inicio = None
@@ -5608,15 +5848,19 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
 
 
 def pagina_vendedores(usuario: Dict[str, Any]) -> None:
+    """
+    Equipe de vendedores em cards (mesmo estilo visual dos leads).
+    - admin: vê todas as lojas
+    - gerente: vê ranking geral, mas leads operacionais já estão filtrados por loja
+    """
     if not usuario_tem("view_team"):
         st.error("Você não tem permissão para ver a equipe.")
         return
 
     st.title("Equipe de Vendedores")
     st.caption(
-        "Ranking calculado automaticamente: "
-        "lead = 100 pontos, ficha gerada = 50, "
-        "aprovação = 150 e venda = 300."
+        "Ranking: lead = 100 pts · ficha = 50 · aprovação = 150 · venda = 300. "
+        "Admin vê todas as lojas; gerente opera na sua loja."
     )
 
     query = text(
@@ -5624,6 +5868,7 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
         SELECT
             v.id,
             v.nome,
+            COALESCE(v.loja, '381') AS loja,
             COUNT(l.id) AS total_leads,
             COUNT(l.id) FILTER (
                 WHERE l.gerou_ficha = TRUE
@@ -5654,7 +5899,7 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
         LEFT JOIN public.leads l
             ON l.vendedor_id = v.id
         WHERE COALESCE(v.ativo, TRUE) = TRUE
-        GROUP BY v.id, v.nome
+        GROUP BY v.id, v.nome, v.loja
         ORDER BY pontos DESC, total_vendas DESC, total_aprovados DESC, v.nome
         """
     )
@@ -5663,73 +5908,82 @@ def pagina_vendedores(usuario: Dict[str, Any]) -> None:
         with engine.connect() as conn:
             df = pd.read_sql_query(query, conn)
     except Exception as erro:
-        st.error(f"Erro ao carregar equipe: {erro}")
-        return
+        # fallback sem coluna loja
+        try:
+            with engine.connect() as conn:
+                df = pd.read_sql_query(
+                    text(
+                        """
+                        SELECT
+                            v.id,
+                            v.nome,
+                            COUNT(l.id) AS total_leads,
+                            COUNT(l.id) FILTER (WHERE l.gerou_ficha = TRUE) AS total_fichas,
+                            COUNT(l.id) FILTER (WHERE l.aprovou_credito = TRUE) AS total_aprovados,
+                            COUNT(l.id) FILTER (
+                                WHERE l.venda_concluida = TRUE OR l.vendeu = TRUE
+                            ) AS total_vendas,
+                            0 AS pontos
+                        FROM public.vendedores v
+                        LEFT JOIN public.leads l ON l.vendedor_id = v.id
+                        WHERE COALESCE(v.ativo, TRUE) = TRUE
+                        GROUP BY v.id, v.nome
+                        ORDER BY v.nome
+                        """
+                    ),
+                    conn,
+                )
+            df["loja"] = "381"
+            df["pontos"] = (
+                df["total_leads"] * 100
+                + df["total_fichas"] * 50
+                + df["total_aprovados"] * 150
+                + df["total_vendas"] * 300
+            )
+        except Exception as erro2:
+            st.error(f"Erro ao carregar equipe: {erro2}")
+            return
 
     if df.empty:
         st.info("Nenhum vendedor encontrado.")
         return
 
-    lojas_por_vendedor = {}
-    try:
-        vendedores_com_loja = obter_vendedores()
-        lojas_por_vendedor = dict(
-            zip(
-                vendedores_com_loja["id"],
-                vendedores_com_loja.get("loja", "381"),
-            )
+    # Filtro visual por loja (admin vê seletor; gerente vê a sua em destaque)
+    lojas = sorted({str(x).upper() for x in df["loja"].dropna().tolist()})
+    if usuario_e_admin() and len(lojas) > 1:
+        loja_filtro = st.selectbox(
+            "Filtrar por loja",
+            options=["TODAS"] + lojas,
+            index=0,
         )
-    except Exception:
-        pass
+        if loja_filtro != "TODAS":
+            df = df[df["loja"].astype(str).str.upper() == loja_filtro]
 
-    for posicao, (_, row) in enumerate(
-        df.iterrows(),
-        start=1,
-    ):
-        with st.container(border=True):
-            loja = normalizar_loja(
-                lojas_por_vendedor.get(row["id"], "381")
-            )
-            st.subheader(f"#{posicao} — {row['nome']} · Loja {loja}")
-            col1, col2, col3, col4, col5 = st.columns(5)
-            col1.metric("Leads", int(row["total_leads"]))
-            col2.metric("Fichas", int(row["total_fichas"]))
-            col3.metric("Aprovados", int(row["total_aprovados"]))
-            col4.metric("Vendas", int(row["total_vendas"]))
-            col5.metric("Pontos", int(row["pontos"] or 0))
-
-    if usuario["tipo"] == "gerente":
-        with st.expander("🏬 Administrar lojas dos usuários"):
-            usuarios = obter_usuarios_ativos()
-            if usuarios.empty:
-                st.info("Nenhum usuário ativo encontrado.")
-            else:
-                st.caption(
-                    "A alteração é aplicada ao usuário e, quando existir, "
-                    "ao vendedor vinculado."
+    # Cards em grade (3 por linha)
+    cols_por_linha = 3
+    rows = list(df.iterrows())
+    for i in range(0, len(rows), cols_por_linha):
+        cols = st.columns(cols_por_linha)
+        for j, col in enumerate(cols):
+            if i + j >= len(rows):
+                break
+            _, row = rows[i + j]
+            with col:
+                st.markdown(
+                    f"""
+                    <div class="vendedor-card">
+                      <h4>{row.get('nome') or '-'}</h4>
+                      <div class="muted">Loja {row.get('loja') or '-'} · {int(row.get('pontos') or 0)} pts</div>
+                      <div style="margin-top:10px;display:flex;gap:12px;flex-wrap:wrap;">
+                        <span>Leads <b>{int(row.get('total_leads') or 0)}</b></span>
+                        <span>Fichas <b>{int(row.get('total_fichas') or 0)}</b></span>
+                        <span>Aprov. <b>{int(row.get('total_aprovados') or 0)}</b></span>
+                        <span>Vendas <b>{int(row.get('total_vendas') or 0)}</b></span>
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
                 )
-                for _, usuario_row in usuarios.iterrows():
-                    usuario_id = int(usuario_row["id"])
-                    loja_atual = normalizar_loja(
-                        usuario_row.get("loja", "381")
-                    )
-                    c_nome, c_loja, c_salvar = st.columns([3, 1, 1])
-                    c_nome.write(
-                        f"**{usuario_row['nome']}** "
-                        f"({normalizar_tipo(usuario_row['tipo'])})"
-                    )
-                    nova_loja = c_loja.selectbox(
-                        "Loja",
-                        LOJAS_DISPONIVEIS,
-                        index=LOJAS_DISPONIVEIS.index(loja_atual),
-                        key=f"loja_usuario_{usuario_id}",
-                        label_visibility="collapsed",
-                    )
-                    if c_salvar.button(
-                        "Salvar",
-                        key=f"salvar_loja_usuario_{usuario_id}",
-                    ):
-                        atualizar_loja_usuario(usuario_id, nova_loja)
 
 
 def pagina_fichas(usuario: Dict[str, Any]) -> None:
@@ -5756,11 +6010,68 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
         )
         marcar_notificacoes_como_lidas(usuario["id"])
 
-    # Métricas financeiras (aprovação por banco, valores etc.):
-    # somente gerente/admin. ElfenAI, vendedor e demais NÃO veem.
-    if usuario_e_gerente():
+    # ---- Filtro de período (mesmo padrão do painel de leads) ----
+    # Padrão: este mês. Contagens e métricas acompanham o intervalo.
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+        periodo_opcoes_f = [
+            "mes_atual",
+            "mes_anterior",
+            "personalizado",
+            "todos",
+        ]
+        if "fichas_periodo" not in st.session_state:
+            st.session_state["fichas_periodo"] = "mes_atual"
+        periodo_f = st.selectbox(
+            "Período das fichas",
+            periodo_opcoes_f,
+            index=periodo_opcoes_f.index(
+                st.session_state.get("fichas_periodo", "mes_atual")
+            )
+            if st.session_state.get("fichas_periodo", "mes_atual") in periodo_opcoes_f
+            else 0,
+            format_func=lambda valor: {
+                "todos": "Todas as datas",
+                "mes_atual": "Este mês",
+                "mes_anterior": "Mês anterior",
+                "personalizado": "Escolher período",
+            }[valor],
+            key="fichas_periodo",
+        )
+    data_inicio_f = None
+    data_fim_f = None
+    hoje_f = date.today()
+    primeiro_f = hoje_f.replace(day=1)
+    if periodo_f == "mes_atual":
+        data_inicio_f = primeiro_f
+        if primeiro_f.month == 12:
+            data_fim_f = primeiro_f.replace(year=primeiro_f.year + 1, month=1) - timedelta(days=1)
+        else:
+            data_fim_f = primeiro_f.replace(month=primeiro_f.month + 1) - timedelta(days=1)
+    elif periodo_f == "mes_anterior":
+        data_fim_f = primeiro_f - timedelta(days=1)
+        data_inicio_f = data_fim_f.replace(day=1)
+    elif periodo_f == "personalizado":
+        with col_p2:
+            datas_f = st.date_input(
+                "Data inicial e final (fichas)",
+                value=(primeiro_f, hoje_f),
+                key="fichas_periodo_datas",
+            )
+        if isinstance(datas_f, (tuple, list)) and len(datas_f) == 2:
+            data_inicio_f, data_fim_f = datas_f
+
+    # Guarda no session_state para as queries de listagem usarem
+    st.session_state["fichas_data_inicio"] = data_inicio_f
+    st.session_state["fichas_data_fim"] = data_fim_f
+
+    # Métricas financeiras: somente admin e gerente.
+    if usuario_e_gestor():
         try:
-            por_banco, geral = obter_metricas_credito()
+            por_banco, geral = obter_metricas_credito(
+                st.session_state.get("fichas_data_inicio"),
+                st.session_state.get("fichas_data_fim"),
+            )
             st.subheader("Métricas financeiras")
             metricas = st.columns(6)
             metricas[0].metric(
@@ -5979,6 +6290,8 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
             busca,
             st.session_state.get("banco_filtro"),
             limite=st.session_state.get("fichas_limite", 24),
+            data_inicio=st.session_state.get("fichas_data_inicio"),
+            data_fim=st.session_state.get("fichas_data_fim"),
         )
     except Exception as erro:
         st.error(
@@ -7165,22 +7478,39 @@ def pagina_chat(usuario: Dict[str, Any]) -> None:
                                 ),
                             )
 
-                    # Várias reações lado a lado (toggle por usuário).
-                    cols_reacao = st.columns(len(CHAT_REACOES))
-                    for idx_r, emoji in enumerate(CHAT_REACOES):
+                    # Resumo compacto das reações (só chips com contagem > 0).
+                    chips = []
+                    for emoji in CHAT_REACOES:
                         qtd = int(mensagem.get(f"reacao_{emoji}") or 0)
-                        label = f"{emoji} {qtd}" if qtd else emoji
-                        with cols_reacao[idx_r]:
-                            if st.button(
-                                label,
-                                key=f"reagir_chat_{mensagem['id']}_{emoji}",
-                            ):
-                                alternar_reacao_chat(
-                                    int(mensagem["id"]),
-                                    usuario_id,
-                                    reacao=emoji,
-                                )
-                                st.rerun()
+                        if qtd:
+                            chips.append(f"{emoji} {qtd}")
+                    if chips:
+                        st.markdown(
+                            '<div class="chat-reacao-resumo">'
+                            + "".join(
+                                f'<span class="chat-reacao-chip">{c}</span>'
+                                for c in chips
+                            )
+                            + "</div>",
+                            unsafe_allow_html=True,
+                        )
+                    # Seletor discreto: abre só quando clica em "Reagir"
+                    with st.expander("Reagir", expanded=False):
+                        cols_reacao = st.columns(len(CHAT_REACOES))
+                        for idx_r, emoji in enumerate(CHAT_REACOES):
+                            qtd = int(mensagem.get(f"reacao_{emoji}") or 0)
+                            label = f"{emoji}" + (f" {qtd}" if qtd else "")
+                            with cols_reacao[idx_r]:
+                                if st.button(
+                                    label,
+                                    key=f"reagir_chat_{mensagem['id']}_{emoji}",
+                                ):
+                                    alternar_reacao_chat(
+                                        int(mensagem["id"]),
+                                        usuario_id,
+                                        reacao=emoji,
+                                    )
+                                    st.rerun()
 
     entrada_chat = None
     chat_com_anexos = True
@@ -7571,7 +7901,7 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
     )
     lojas = list(LOJAS_DISPONIVEIS)
 
-    if usuario["tipo"] == "gerente":
+    if usuario_e_gestor():
         ids_usuarios = [None] + usuarios["id"].tolist()
         nomes_usuarios = {None: "— nenhum usuário específico —"}
         nomes_usuarios.update(
@@ -7785,7 +8115,7 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
             c3.write(meta.get("criador_nome") or "-")
 
             # Somente gerente/admin edita, marca conclusão e remove.
-            if usuario["tipo"] == "gerente":
+            if usuario_e_gestor():
                 st.markdown("---")
                 st.markdown("**Administração da meta**")
 
@@ -8181,7 +8511,11 @@ def notificar_usuarios_oficina(
                         'administrador',
                         'dono',
                         'owner',
-                        'proprietario'
+                        'proprietario',
+                        'marketing',
+                        'guariba',
+                        'mecanico',
+                        'mecânico'
                     )
                     OR ({filtro_extra})
               )
@@ -8652,6 +8986,208 @@ def pagina_oficina(usuario: Dict[str, Any]) -> None:
 
 
 
+
+# ============================================================
+# WHATSAPP EM MASSA (fase de teste)
+# ============================================================
+#
+# COMO FUNCIONA (duas camadas):
+#
+# 1) Python / Streamlit (esta página)
+#    - Filtra leads por status (aprovados / negados / vendidos) + período
+#    - Monta a mensagem com placeholders {nome}, {carro}, {vendedor}
+#    - Gera links wa.me (funciona no celular sem QR)
+#    - Opcionalmente enfileira envio via serviço Node (whatsapp-web.js)
+#
+# 2) Node / whatsapp-web.js (serviço separado — veja whatsapp_service/)
+#    - Cada usuário do sistema tem uma sessão própria (pasta sessions/{user_id})
+#    - Gera QR Code na primeira conexão (desktop)
+#    - No celular o fluxo normal do WhatsApp Web já autentica
+#    - Endpoint HTTP local: POST /send  { session, phones[], message }
+#
+# Para ativar o envio real via Node:
+#   1. cd whatsapp_service && npm install && node server.js
+#   2. Defina em secrets: [whatsapp] base_url = "http://localhost:3100"
+#   3. Descomente o bloco "ENVIO REAL" abaixo
+#
+# ---------------------------------------------------------------------------
+
+def pagina_whatsapp(usuario: Dict[str, Any]) -> None:
+    """Disparo de mensagens em massa (teste) para leads filtrados."""
+    if not usuario_e_gestor() and usuario["tipo"] != "vendedor":
+        st.error("Sem permissão para o módulo WhatsApp.")
+        return
+
+    st.title("WhatsApp em massa")
+    st.caption(
+        "Fase de teste. No celular os links abrem o app direto. "
+        "No desktop, conecte a sessão (QR) pelo serviço Node quando ativado."
+    )
+
+    # ---- Sessão WhatsApp (QR) ----
+    with st.expander("📱 Minha sessão WhatsApp (QR Code)", expanded=False):
+        st.markdown(
+            """
+            **Desktop:** suba o serviço `whatsapp_service` e clique em
+            *Gerar QR*. Escaneie com o WhatsApp do celular.
+
+            **Celular:** não precisa de QR — use os botões *Abrir no WhatsApp*
+            que geram `wa.me` e abrem o app nativo.
+            """
+        )
+        # Placeholder visual — o QR real vem do serviço Node
+        st.info(
+            f"Sessão deste usuário: `user_{usuario['id']}`. "
+            "Quando o serviço Node estiver online, o QR aparece aqui."
+        )
+        # ENVIO REAL (descomente quando o Node estiver rodando):
+        # try:
+        #     import requests
+        #     base = st.secrets.get("whatsapp", {}).get("base_url", "http://localhost:3100")
+        #     r = requests.get(f"{base}/qr/{usuario['id']}", timeout=5)
+        #     if r.ok and r.json().get("qr"):
+        #         st.image(r.json()["qr"])
+        #     else:
+        #         st.caption(r.json().get("status", "Aguardando QR…"))
+        # except Exception as erro:
+        #     st.warning(f"Serviço WhatsApp offline: {erro}")
+
+    # ---- Filtros de destinatários ----
+    st.subheader("Destinatários")
+    status_alvo = st.multiselect(
+        "Status dos leads",
+        options=["aprovados", "negados", "vendidos"],
+        default=["aprovados"],
+    )
+    periodo_wa = st.selectbox(
+        "Período",
+        ["mes_atual", "mes_anterior", "todos", "personalizado"],
+        format_func=lambda v: {
+            "mes_atual": "Este mês",
+            "mes_anterior": "Mês anterior",
+            "todos": "Todo o período",
+            "personalizado": "Personalizado",
+        }[v],
+    )
+    di, df_ = None, None
+    hoje = date.today()
+    prim = hoje.replace(day=1)
+    if periodo_wa == "mes_atual":
+        di, df_ = prim, hoje
+    elif periodo_wa == "mes_anterior":
+        df_ = prim - timedelta(days=1)
+        di = df_.replace(day=1)
+    elif periodo_wa == "personalizado":
+        rng = st.date_input("Intervalo", value=(prim, hoje), key="wa_periodo")
+        if isinstance(rng, (tuple, list)) and len(rng) == 2:
+            di, df_ = rng
+
+    # Monta condições SQL a partir dos status escolhidos
+    conds = []
+    if "aprovados" in status_alvo:
+        conds.append("COALESCE(l.aprovou_credito, FALSE) = TRUE")
+    if "negados" in status_alvo:
+        conds.append(
+            "(l.gerou_ficha = TRUE AND COALESCE(l.aprovou_credito, TRUE) = FALSE)"
+        )
+    if "vendidos" in status_alvo:
+        conds.append(
+            "(COALESCE(l.venda_concluida, FALSE) = TRUE OR COALESCE(l.vendeu, FALSE) = TRUE)"
+        )
+    if not conds:
+        st.warning("Selecione ao menos um status.")
+        return
+
+    escopo, params = escopo_leads(usuario)
+    params = dict(params)
+    filtros = [escopo, "(" + " OR ".join(conds) + ")"]
+    if di is not None:
+        filtros.append("l.data_lead >= :wa_di")
+        params["wa_di"] = di
+    if df_ is not None:
+        filtros.append("l.data_lead < :wa_df")
+        params["wa_df"] = df_ + timedelta(days=1)
+
+    query = text(
+        f"""
+        SELECT l.id, l.nome_lead, l.telefone, l.carro_selecionado,
+               v.nome AS nome_vendedor
+        FROM public.leads l
+        LEFT JOIN public.vendedores v ON v.id = l.vendedor_id
+        WHERE {" AND ".join(f"({f})" for f in filtros)}
+          AND l.telefone IS NOT NULL
+        ORDER BY l.updated_at DESC NULLS LAST
+        LIMIT 500
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            df_dest = pd.read_sql_query(query, conn, params=params)
+    except Exception as erro:
+        st.error(f"Erro ao buscar destinatários: {erro}")
+        return
+
+    st.caption(f"{len(df_dest)} destinatário(s) encontrados.")
+    if not df_dest.empty:
+        st.dataframe(
+            df_dest[["nome_lead", "telefone", "carro_selecionado", "nome_vendedor"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.subheader("Mensagem")
+    st.caption("Placeholders: {nome} {carro} {vendedor}")
+    modelo = st.text_area(
+        "Texto",
+        value=(
+            "Olá {nome}! Aqui é da Manu Automóveis. "
+            "Sobre o {carro}: podemos conversar?"
+        ),
+        height=120,
+    )
+
+    if st.button("Gerar links wa.me", type="primary", use_container_width=True):
+        if df_dest.empty:
+            st.warning("Nenhum destinatário.")
+        else:
+            st.markdown("### Links (abra no celular ou clique)")
+            for _, row in df_dest.iterrows():
+                link = gerar_link_whatsapp(row.get("telefone"))
+                if not link:
+                    continue
+                msg = (
+                    modelo.replace("{nome}", str(row.get("nome_lead") or ""))
+                    .replace("{carro}", str(row.get("carro_selecionado") or "veículo"))
+                    .replace("{vendedor}", str(row.get("nome_vendedor") or ""))
+                )
+                from urllib.parse import quote
+                url = f"{link}?text={quote(msg)}"
+                st.markdown(f"- **{row.get('nome_lead')}**: [Abrir WhatsApp]({url})")
+
+    # ENVIO REAL via Node (descomente para ativar):
+    # if st.button("Enviar via sessão WhatsApp Web"):
+    #     import requests
+    #     base = st.secrets.get("whatsapp", {}).get("base_url", "http://localhost:3100")
+    #     payload = {
+    #         "session": f"user_{usuario['id']}",
+    #         "messages": [
+    #             {
+    #                 "phone": str(row["telefone"]),
+    #                 "text": modelo.replace("{nome}", str(row.get("nome_lead") or ""))
+    #                         .replace("{carro}", str(row.get("carro_selecionado") or ""))
+    #                         .replace("{vendedor}", str(row.get("nome_vendedor") or "")),
+    #             }
+    #             for _, row in df_dest.iterrows()
+    #         ],
+    #     }
+    #     try:
+    #         r = requests.post(f"{base}/send", json=payload, timeout=60)
+    #         st.success(r.json())
+    #     except Exception as erro:
+    #         st.error(f"Falha no envio: {erro}")
+
+
+
 # ============================================================
 # EXECUÇÃO PRINCIPAL
 # ============================================================
@@ -8694,6 +9230,9 @@ if usuario_tem("view_tasks"):
 if usuario_tem("view_goals"):
     paginas_permitidas.add("metas")
 
+if usuario_e_gestor() or st.session_state.get("usuario_logado", {}).get("tipo") == "vendedor":
+    paginas_permitidas.add("whatsapp")
+
 if not paginas_permitidas:
     paginas_permitidas.add("chat")
 
@@ -8730,3 +9269,5 @@ elif pagina_atual == "tarefas":
     pagina_tarefas(usuario_atual)
 elif pagina_atual == "metas":
     pagina_metas(usuario_atual)
+elif pagina_atual == "whatsapp":
+    pagina_whatsapp(usuario_atual)
