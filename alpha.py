@@ -230,7 +230,7 @@ ROLE_ALIASES = {
     "mecânico": "mecanico",
 }
 
-LOJAS_DISPONIVEIS = ("381", "746", "NINA")
+LOJAS_DISPONIVEIS = ("381", "764", "NINA")
 
 
 def normalizar_loja(loja: Any) -> str:
