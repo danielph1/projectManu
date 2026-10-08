@@ -8599,7 +8599,7 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
                             st.error(f"Erro ao atualizar meta: {erro}")
 
                 if st.button(
-                    "🗑️ Remover meta",
+                    "Remover meta",
                     key=f"remover_meta_{meta['id']}",
                 ):
                     try:
