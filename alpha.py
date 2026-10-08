@@ -9137,7 +9137,7 @@ def pagina_oficina(usuario: Dict[str, Any]) -> None:
             return
 
         for _, carro in df.iterrows():
-            status = "✅ Pronto" if bool(carro.get("pronto")) else "🔧 Em andamento"
+            status = "✅ Pronto" if bool(carro.get("pronto")) else "Em andamento"
             titulo = (
                 f"{status} · {carro.get('marca') or '-'} "
                 f"{carro.get('modelo') or '-'} "
