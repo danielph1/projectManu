@@ -79,6 +79,38 @@ st.set_page_config(
     page_title="Manu Automoveis",
     page_icon="📊",
     layout="wide",
+    # Esconde o menu padrão e o rodapé (GitHub / Made with Streamlit)
+    initial_sidebar_state="expanded",
+)
+
+# ---------------------------------------------------------------------------
+# CORES DO APP (altere aqui se quiser outro tema visual)
+# ---------------------------------------------------------------------------
+# --cor-fundo:        #0e1117   (fundo geral)
+# --cor-sidebar:      #262730   (barra lateral)
+# --cor-primaria:     #ff4b4b   (botões ativos / destaque)
+# --cor-sucesso:      #21c35e   (aprovado / pronto)
+# --cor-aviso:        #f0ad4e   (pendente)
+# --cor-erro:         #ff4b4b   (negado)
+# --cor-texto:        #fafafa   (texto principal)
+# --cor-borda:        #3a3b45   (bordas de cards)
+# ---------------------------------------------------------------------------
+st.markdown(
+    """
+    <style>
+    /* Remove a coroa / menu hamburger do Streamlit e o rodapé "Made with Streamlit" */
+    #MainMenu {visibility: hidden;}
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    [data-testid="stToolbar"] {display: none !important;}
+    [data-testid="stDecoration"] {display: none !important;}
+    [data-testid="stStatusWidget"] {display: none !important;}
+    .stDeployButton {display: none !important;}
+    /* Remove o link do GitHub / perfil no canto inferior */
+    a[href*="github.com"] {display: none !important;}
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 
@@ -707,11 +739,17 @@ def buscar_leads(
     escopo, parametros = escopo_leads(usuario)
     filtros = [escopo]
 
+    # Categorias do painel de leads.
+    # "negados" = gerou ficha e crédito explicitamente negado (aprovou_credito = FALSE).
     filtros_por_categoria = {
         "fichas": "l.gerou_ficha = TRUE",
         "aprovados": (
             "l.gerou_ficha = TRUE "
             "AND l.aprovou_credito = TRUE"
+        ),
+        "negados": (
+            "l.gerou_ficha = TRUE "
+            "AND COALESCE(l.aprovou_credito, TRUE) = FALSE"
         ),
         "responderam": "l.respondeu = TRUE",
         "nao_responderam": "COALESCE(l.respondeu, FALSE) = FALSE",
@@ -1046,15 +1084,35 @@ def obter_tarefas(usuario: Dict[str, Any]) -> pd.DataFrame:
 
 
 def obter_metas(usuario: Dict[str, Any]) -> pd.DataFrame:
+    """
+    Escopo de visibilidade das metas:
+    - gerente/admin: vê todas
+    - demais: só metas direcionadas a si, ao seu tipo, à sua loja
+      ou metas gerais (sem destinatário/tipo/loja)
+    Colunas opcionais (schema_oficina / schema_metas_v2):
+      destinatario_tipo, destinatario_loja, concluida
+    """
     if usuario["tipo"] == "gerente":
         filtro = "TRUE"
         parametros = {}
     else:
         filtro = """
-            m.destinatario_id = :usuario_id
-            OR m.destinatario_id IS NULL
+            (
+                m.destinatario_id = :usuario_id
+                OR (
+                    m.destinatario_id IS NULL
+                    AND COALESCE(m.destinatario_tipo, '') = ''
+                    AND COALESCE(m.destinatario_loja, '') = ''
+                )
+                OR LOWER(COALESCE(m.destinatario_tipo, '')) = LOWER(:tipo_usuario)
+                OR UPPER(COALESCE(m.destinatario_loja, '')) = UPPER(:loja_usuario)
+            )
         """
-        parametros = {"usuario_id": usuario["id"]}
+        parametros = {
+            "usuario_id": usuario["id"],
+            "tipo_usuario": usuario.get("tipo") or "",
+            "loja_usuario": usuario.get("loja") or "",
+        }
 
     query = text(
         f"""
@@ -1072,7 +1130,10 @@ def obter_metas(usuario: Dict[str, Any]) -> pd.DataFrame:
             m.created_at,
             m.updated_at,
             destinatario.nome AS destinatario_nome,
-            criador.nome AS criador_nome
+            criador.nome AS criador_nome,
+            COALESCE(m.destinatario_tipo, NULL) AS destinatario_tipo,
+            COALESCE(m.destinatario_loja, NULL) AS destinatario_loja,
+            COALESCE(m.concluida, NULL) AS concluida
         FROM public.metas m
         LEFT JOIN public.usuarios destinatario
             ON destinatario.id = m.destinatario_id
@@ -1084,8 +1145,45 @@ def obter_metas(usuario: Dict[str, Any]) -> pd.DataFrame:
         """
     )
 
-    with engine.connect() as conn:
-        return pd.read_sql_query(query, conn, params=parametros)
+    try:
+        with engine.connect() as conn:
+            return pd.read_sql_query(query, conn, params=parametros)
+    except Exception:
+        # Fallback se as colunas novas ainda não existem.
+        query_legado = text(
+            f"""
+            SELECT
+                m.id,
+                m.titulo,
+                m.descricao,
+                m.unidade,
+                m.valor_objetivo,
+                m.periodo_inicio,
+                m.periodo_fim,
+                m.destinatario_id,
+                m.criado_por_id,
+                m.ativo,
+                m.created_at,
+                m.updated_at,
+                destinatario.nome AS destinatario_nome,
+                criador.nome AS criador_nome
+            FROM public.metas m
+            LEFT JOIN public.usuarios destinatario
+                ON destinatario.id = m.destinatario_id
+            JOIN public.usuarios criador
+                ON criador.id = m.criado_por_id
+            WHERE ({filtro if usuario['tipo'] == 'gerente' else 'm.destinatario_id = :usuario_id OR m.destinatario_id IS NULL'})
+              AND m.ativo = TRUE
+            ORDER BY m.periodo_fim ASC NULLS LAST, m.created_at DESC
+            """
+        )
+        params_legado = {} if usuario["tipo"] == "gerente" else {"usuario_id": usuario["id"]}
+        with engine.connect() as conn:
+            df = pd.read_sql_query(query_legado, conn, params=params_legado)
+        df["destinatario_tipo"] = None
+        df["destinatario_loja"] = None
+        df["concluida"] = None
+        return df
 
 
 def converter_data(valor: Any) -> date:
@@ -4728,7 +4826,7 @@ def mostrar_lista_estoque(
     ):
         carros = grupos[marca]
         with st.expander(
-            f"{marca} ({len(carros)})",
+            f"🚘 {marca} ({len(carros)})",
             expanded=False,
         ):
             for carro in carros:
@@ -4747,7 +4845,8 @@ def pagina_estoque(usuario: Dict[str, Any]) -> None:
 
     st.title("Estoque de carros")
     st.caption(
-        "Você pode acompanhar o estoque dos carros e pesquisar por placa, marca, modelo, cor, placa ou ano."
+        "Todos podem consultar. Apenas gerente e documentista "
+        "podem cadastrar, editar, excluir e anexar arquivos."
     )
 
     if usuario_tem("manage_stock"):
@@ -5131,6 +5230,179 @@ def pagina_documentista(usuario: Dict[str, Any]) -> None:
 def pagina_leads(usuario: Dict[str, Any]) -> None:
     st.title("Painel de Controle")
 
+
+    # ------------------------------------------------------------------
+    # Transferência em massa de leads (somente gerente/admin)
+    # ------------------------------------------------------------------
+    if usuario_e_gerente():
+        with st.expander("🔀 Transferir leads entre vendedores", expanded=False):
+            df_vend = obter_vendedores()
+            if df_vend.empty:
+                st.warning("Nenhum vendedor ativo.")
+            else:
+                mapa_vend = dict(zip(df_vend["id"], df_vend["nome"]))
+                ids_vend = df_vend["id"].tolist()
+                origem = st.selectbox(
+                    "Vendedor de origem",
+                    options=ids_vend,
+                    format_func=lambda i: mapa_vend.get(i, str(i)),
+                    key="transf_massa_origem",
+                )
+                modo = st.radio(
+                    "Destino",
+                    ["vendedor_especifico", "aleatorio", "aleatorio_loja"],
+                    format_func=lambda v: {
+                        "vendedor_especifico": "Vendedor específico",
+                        "aleatorio": "Aleatório (qualquer vendedor ativo)",
+                        "aleatorio_loja": "Aleatório em uma loja",
+                    }[v],
+                    horizontal=True,
+                    key="transf_massa_modo",
+                )
+                destino_id = None
+                loja_destino = None
+                if modo == "vendedor_especifico":
+                    destino_id = st.selectbox(
+                        "Vendedor de destino",
+                        options=[i for i in ids_vend if i != origem],
+                        format_func=lambda i: mapa_vend.get(i, str(i)),
+                        key="transf_massa_destino",
+                    )
+                elif modo == "aleatorio_loja":
+                    loja_destino = st.selectbox(
+                        "Loja de destino",
+                        options=list(LOJAS_DISPONIVEIS),
+                        key="transf_massa_loja",
+                    )
+
+                # Preview de quantos leads seriam movidos
+                try:
+                    with engine.connect() as conn:
+                        qtd = conn.execute(
+                            text(
+                                """
+                                SELECT COUNT(*)
+                                FROM public.leads
+                                WHERE vendedor_id = :origem
+                                """
+                            ),
+                            {"origem": origem},
+                        ).scalar() or 0
+                    st.caption(f"Leads do vendedor de origem: **{qtd}**")
+                except Exception:
+                    qtd = 0
+
+                if st.button(
+                    "Executar transferência",
+                    type="primary",
+                    key="btn_transf_massa",
+                    use_container_width=True,
+                ):
+                    try:
+                        with engine.begin() as conn:
+                            leads = conn.execute(
+                                text(
+                                    """
+                                    SELECT id
+                                    FROM public.leads
+                                    WHERE vendedor_id = :origem
+                                    """
+                                ),
+                                {"origem": origem},
+                            ).fetchall()
+                            if not leads:
+                                st.warning("Nenhum lead para transferir.")
+                            else:
+                                import random as _random
+
+                                if modo == "vendedor_especifico":
+                                    destinos = [destino_id] * len(leads)
+                                elif modo == "aleatorio_loja":
+                                    candidatos = df_vend[
+                                        df_vend.get("loja", "381")
+                                        .astype(str)
+                                        .str.upper()
+                                        == str(loja_destino).upper()
+                                    ]["id"].tolist()
+                                    if not candidatos:
+                                        # fallback: todos se a coluna loja não filtrar
+                                        candidatos = [
+                                            i for i in ids_vend if i != origem
+                                        ]
+                                    if not candidatos:
+                                        st.error("Nenhum vendedor na loja escolhida.")
+                                        destinos = []
+                                    else:
+                                        destinos = [
+                                            _random.choice(candidatos)
+                                            for _ in leads
+                                        ]
+                                else:
+                                    candidatos = [
+                                        i for i in ids_vend if i != origem
+                                    ]
+                                    destinos = [
+                                        _random.choice(candidatos)
+                                        for _ in leads
+                                    ]
+
+                                movidos = 0
+                                for (lead_id,), dest in zip(leads, destinos):
+                                    if dest is None:
+                                        continue
+                                    nome_origem = mapa_vend.get(origem, str(origem))
+                                    nome_dest = mapa_vend.get(dest, str(dest))
+                                    conn.execute(
+                                        text(
+                                            """
+                                            UPDATE public.leads
+                                            SET vendedor_id = :destino,
+                                                updated_at = NOW()
+                                            WHERE id = :lead_id
+                                            """
+                                        ),
+                                        {"destino": dest, "lead_id": lead_id},
+                                    )
+                                    conn.execute(
+                                        text(
+                                            """
+                                            INSERT INTO public.lead_transferencias (
+                                                lead_id,
+                                                vendedor_origem_id,
+                                                vendedor_origem_nome,
+                                                vendedor_destino_id,
+                                                vendedor_destino_nome,
+                                                transferido_por_id,
+                                                transferido_por_nome
+                                            )
+                                            VALUES (
+                                                :lead_id,
+                                                :origem_id,
+                                                :origem_nome,
+                                                :destino_id,
+                                                :destino_nome,
+                                                :por_id,
+                                                :por_nome
+                                            )
+                                            """
+                                        ),
+                                        {
+                                            "lead_id": lead_id,
+                                            "origem_id": origem,
+                                            "origem_nome": nome_origem,
+                                            "destino_id": dest,
+                                            "destino_nome": nome_dest,
+                                            "por_id": usuario["id"],
+                                            "por_nome": usuario.get("nome") or "",
+                                        },
+                                    )
+                                    movidos += 1
+                                st.success(f"{movidos} lead(s) transferidos.")
+                                st.cache_data.clear()
+                                st.rerun()
+                    except Exception as erro:
+                        st.error(f"Erro na transferência em massa: {erro}")
+
     if usuario_tem("create_lead"):
         if st.button(
             "➕ Adicionar lead",
@@ -5147,6 +5419,7 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
         "nao_responderam",
         "fichas",
         "aprovados",
+        "negados",
         "vendidos",
     ]
     filtro_atual = st.session_state["filtro_categoria"]
@@ -5164,6 +5437,7 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
             "nao_responderam": "Não responderam",
             "fichas": "Fichas",
             "aprovados": "Aprovados",
+            "negados": "Negados",
             "vendidos": "Vendidos",
         }[valor],
     )
@@ -5482,7 +5756,9 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
         )
         marcar_notificacoes_como_lidas(usuario["id"])
 
-    if usuario_tem("view_credit_metrics"):
+    # Métricas financeiras (aprovação por banco, valores etc.):
+    # somente gerente/admin. ElfenAI, vendedor e demais NÃO veem.
+    if usuario_e_gerente():
         try:
             por_banco, geral = obter_metricas_credito()
             st.subheader("Métricas financeiras")
@@ -6543,9 +6819,19 @@ def marcar_chat_geral_como_lido(usuario_id: int) -> None:
         )
 
 
+# Reações disponíveis no chat geral (adicione/remova emojis aqui).
+CHAT_REACOES = ("👍", "❤️", "😂", "😮", "😢", "🔥", "👏")
+
+
 def obter_chat_geral() -> pd.DataFrame:
+    # Conta cada tipo de reação em colunas reacao_👍, reacao_❤️, ...
+    filtros_reacao = ",\n".join(
+        f"""            COUNT(r.id) FILTER (WHERE r.reacao = '{emoji}')
+                AS "reacao_{emoji}" """
+        for emoji in CHAT_REACOES
+    )
     query = text(
-        """
+        f"""
         SELECT
             m.id,
             m.remetente_id,
@@ -6556,8 +6842,7 @@ def obter_chat_geral() -> pd.DataFrame:
             (m.arquivo_bytes IS NOT NULL) AS tem_anexo,
             m.created_at,
             u.nome AS nome_remetente,
-            COUNT(r.id) FILTER (WHERE r.reacao = '👍')
-                AS reacoes_like
+{filtros_reacao}
         FROM public.chat_geral_mensagens m
         JOIN public.usuarios u
             ON u.id = m.remetente_id
@@ -6880,15 +7165,22 @@ def pagina_chat(usuario: Dict[str, Any]) -> None:
                                 ),
                             )
 
-                    if st.button(
-                        f"👍 {int(mensagem.get('reacoes_like') or 0)}",
-                        key=f"reagir_chat_{mensagem['id']}",
-                    ):
-                        alternar_reacao_chat(
-                            int(mensagem["id"]),
-                            usuario_id,
-                        )
-                        st.rerun()
+                    # Várias reações lado a lado (toggle por usuário).
+                    cols_reacao = st.columns(len(CHAT_REACOES))
+                    for idx_r, emoji in enumerate(CHAT_REACOES):
+                        qtd = int(mensagem.get(f"reacao_{emoji}") or 0)
+                        label = f"{emoji} {qtd}" if qtd else emoji
+                        with cols_reacao[idx_r]:
+                            if st.button(
+                                label,
+                                key=f"reagir_chat_{mensagem['id']}_{emoji}",
+                            ):
+                                alternar_reacao_chat(
+                                    int(mensagem["id"]),
+                                    usuario_id,
+                                    reacao=emoji,
+                                )
+                                st.rerun()
 
     entrada_chat = None
     chat_com_anexos = True
@@ -7258,8 +7550,10 @@ def pagina_tarefas(usuario: Dict[str, Any]) -> None:
 
 def pagina_metas(usuario: Dict[str, Any]) -> None:
     """
-    Metas são visíveis para cada destinatário e para o gerente.
-    Somente o gerente cria, altera e remove.
+    Metas:
+    - somente gerente/admin cria, edita, remove e marca concluída;
+    - destinatário pode ser: usuário específico, tipo (perfil) ou loja;
+    - cada usuário só vê metas relacionadas a ele (ou gerais).
     """
     if not usuario_tem("view_goals"):
         st.error("Você não tem permissão para acessar metas.")
@@ -7268,10 +7562,18 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
     st.title("Metas")
 
     usuarios = obter_usuarios_ativos()
+    tipos_disponiveis = sorted(
+        {
+            normalizar_tipo(t)
+            for t in usuarios.get("tipo", pd.Series(dtype=str)).dropna().tolist()
+        }
+        | set(PERMISSIONS.keys())
+    )
+    lojas = list(LOJAS_DISPONIVEIS)
 
     if usuario["tipo"] == "gerente":
         ids_usuarios = [None] + usuarios["id"].tolist()
-        nomes_usuarios = {None: "Meta geral — todos"}
+        nomes_usuarios = {None: "— nenhum usuário específico —"}
         nomes_usuarios.update(
             dict(zip(usuarios["id"], usuarios["nome"]))
         )
@@ -7298,10 +7600,22 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
                     "Fim do período",
                     value=date.today(),
                 )
+                # Destino: usuário OU tipo OU loja (prioridade nessa ordem na exibição)
+                st.markdown("**Destino da meta** (escolha um ou deixe todos vazios = geral)")
                 destinatario_id = st.selectbox(
-                    "Destinatário",
+                    "Usuário específico",
                     options=ids_usuarios,
                     format_func=lambda valor: nomes_usuarios[valor],
+                )
+                destinatario_tipo = st.selectbox(
+                    "Perfil / tipo de usuário",
+                    options=[None] + tipos_disponiveis,
+                    format_func=lambda v: "— nenhum —" if v is None else v,
+                )
+                destinatario_loja = st.selectbox(
+                    "Loja",
+                    options=[None] + lojas,
+                    format_func=lambda v: "— nenhuma —" if v is None else v,
                 )
                 criar = st.form_submit_button(
                     "Criar meta",
@@ -7330,6 +7644,8 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
                                         periodo_inicio,
                                         periodo_fim,
                                         destinatario_id,
+                                        destinatario_tipo,
+                                        destinatario_loja,
                                         criado_por_id
                                     )
                                     VALUES (
@@ -7340,6 +7656,8 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
                                         :periodo_inicio,
                                         :periodo_fim,
                                         :destinatario_id,
+                                        :destinatario_tipo,
+                                        :destinatario_loja,
                                         :criado_por_id
                                     )
                                     """
@@ -7356,21 +7674,71 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
                                     "periodo_inicio": periodo_inicio,
                                     "periodo_fim": periodo_fim,
                                     "destinatario_id": destinatario_id,
+                                    "destinatario_tipo": destinatario_tipo,
+                                    "destinatario_loja": destinatario_loja,
                                     "criado_por_id": usuario["id"],
                                 },
                             )
                         st.success("Meta criada.")
                         st.rerun()
                     except Exception as erro:
-                        st.error(f"Erro ao criar meta: {erro}")
+                        # Fallback sem colunas novas
+                        try:
+                            with engine.begin() as conn:
+                                conn.execute(
+                                    text(
+                                        """
+                                        INSERT INTO public.metas (
+                                            titulo,
+                                            descricao,
+                                            unidade,
+                                            valor_objetivo,
+                                            periodo_inicio,
+                                            periodo_fim,
+                                            destinatario_id,
+                                            criado_por_id
+                                        )
+                                        VALUES (
+                                            :titulo,
+                                            :descricao,
+                                            :unidade,
+                                            :valor_objetivo,
+                                            :periodo_inicio,
+                                            :periodo_fim,
+                                            :destinatario_id,
+                                            :criado_por_id
+                                        )
+                                        """
+                                    ),
+                                    {
+                                        "titulo": titulo.strip(),
+                                        "descricao": (
+                                            descricao.strip()
+                                            if descricao.strip()
+                                            else None
+                                        ),
+                                        "unidade": unidade.strip() or "unidade",
+                                        "valor_objetivo": valor_objetivo,
+                                        "periodo_inicio": periodo_inicio,
+                                        "periodo_fim": periodo_fim,
+                                        "destinatario_id": destinatario_id,
+                                        "criado_por_id": usuario["id"],
+                                    },
+                                )
+                            st.success(
+                                "Meta criada (sem tipo/loja — rode schema_metas_v2.sql)."
+                            )
+                            st.rerun()
+                        except Exception as erro2:
+                            st.error(f"Erro ao criar meta: {erro2}")
 
     try:
         metas = obter_metas(usuario)
     except Exception as erro:
         st.error(
             "Não foi possível carregar metas. "
-            "Execute primeiro o arquivo schema_metas_tarefas.sql "
-            f"no Supabase. Detalhe: {erro}"
+            "Execute schema_metas_tarefas.sql / schema_metas_v2.sql. "
+            f"Detalhe: {erro}"
         )
         return
 
@@ -7379,14 +7747,30 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
         return
 
     for _, meta in metas.iterrows():
-        destino = meta.get("destinatario_nome") or "Todos"
+        partes_destino = []
+        if meta.get("destinatario_nome"):
+            partes_destino.append(str(meta["destinatario_nome"]))
+        if meta.get("destinatario_tipo"):
+            partes_destino.append(f"tipo:{meta['destinatario_tipo']}")
+        if meta.get("destinatario_loja"):
+            partes_destino.append(f"loja:{meta['destinatario_loja']}")
+        destino = " · ".join(partes_destino) if partes_destino else "Geral"
+
+        concluida = meta.get("concluida")
+        if concluida is True:
+            status_meta = "✅ Concluída"
+        elif concluida is False:
+            status_meta = "❌ Não concluída"
+        else:
+            status_meta = "⏳ Em aberto"
+
         periodo = (
             f"{formatar_data_br(meta.get('periodo_inicio'))} até "
             f"{formatar_data_br(meta.get('periodo_fim'))}"
         )
 
         with st.expander(
-            f"🎯 {meta['titulo']}  |  {destino}",
+            f"{status_meta}  ·  {meta['titulo']}  |  {destino}",
             expanded=True,
         ):
             st.write(meta.get("descricao") or "Sem descrição.")
@@ -7400,14 +7784,91 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
             c3.write("**Criada por**")
             c3.write(meta.get("criador_nome") or "-")
 
+            # Somente gerente/admin edita, marca conclusão e remove.
             if usuario["tipo"] == "gerente":
                 st.markdown("---")
+                st.markdown("**Administração da meta**")
+
+                # Marcar conclusão fora do form de edição completa
+                col_c1, col_c2, col_c3 = st.columns(3)
+                with col_c1:
+                    if st.button(
+                        "✅ Marcar concluída",
+                        key=f"meta_ok_{meta['id']}",
+                        use_container_width=True,
+                    ):
+                        try:
+                            with engine.begin() as conn:
+                                conn.execute(
+                                    text(
+                                        """
+                                        UPDATE public.metas
+                                        SET concluida = TRUE,
+                                            updated_at = NOW()
+                                        WHERE id = :id
+                                        """
+                                    ),
+                                    {"id": meta["id"]},
+                                )
+                            st.success("Meta marcada como concluída.")
+                            st.rerun()
+                        except Exception as erro:
+                            st.error(f"Erro: {erro}")
+                with col_c2:
+                    if st.button(
+                        "❌ Marcar não concluída",
+                        key=f"meta_nok_{meta['id']}",
+                        use_container_width=True,
+                    ):
+                        try:
+                            with engine.begin() as conn:
+                                conn.execute(
+                                    text(
+                                        """
+                                        UPDATE public.metas
+                                        SET concluida = FALSE,
+                                            updated_at = NOW()
+                                        WHERE id = :id
+                                        """
+                                    ),
+                                    {"id": meta["id"]},
+                                )
+                            st.success("Meta marcada como não concluída.")
+                            st.rerun()
+                        except Exception as erro:
+                            st.error(f"Erro: {erro}")
+                with col_c3:
+                    if st.button(
+                        "⏳ Limpar status",
+                        key=f"meta_clear_{meta['id']}",
+                        use_container_width=True,
+                    ):
+                        try:
+                            with engine.begin() as conn:
+                                conn.execute(
+                                    text(
+                                        """
+                                        UPDATE public.metas
+                                        SET concluida = NULL,
+                                            updated_at = NOW()
+                                        WHERE id = :id
+                                        """
+                                    ),
+                                    {"id": meta["id"]},
+                                )
+                            st.success("Status limpo.")
+                            st.rerun()
+                        except Exception as erro:
+                            st.error(f"Erro: {erro}")
+
                 ids_usuarios = [None] + usuarios["id"].tolist()
-                nomes_usuarios = {None: "Meta geral — todos"}
+                nomes_usuarios = {None: "— nenhum usuário específico —"}
                 nomes_usuarios.update(
                     dict(zip(usuarios["id"], usuarios["nome"]))
                 )
                 destinatario_atual = meta.get("destinatario_id")
+                if pd.isna(destinatario_atual):
+                    destinatario_atual = None
                 indice_destinatario = (
                     ids_usuarios.index(destinatario_atual)
                     if destinatario_atual in ids_usuarios
@@ -7442,10 +7903,38 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
                         value=converter_data(meta.get("periodo_fim")),
                     )
                     novo_destinatario = st.selectbox(
-                        "Destinatário",
+                        "Usuário",
                         options=ids_usuarios,
                         index=indice_destinatario,
                         format_func=lambda valor: nomes_usuarios[valor],
+                    )
+                    tipo_atual = meta.get("destinatario_tipo")
+                    if pd.isna(tipo_atual) or not tipo_atual:
+                        tipo_atual = None
+                    idx_tipo = (
+                        ([None] + tipos_disponiveis).index(tipo_atual)
+                        if tipo_atual in ([None] + tipos_disponiveis)
+                        else 0
+                    )
+                    novo_tipo = st.selectbox(
+                        "Perfil / tipo",
+                        options=[None] + tipos_disponiveis,
+                        index=idx_tipo,
+                        format_func=lambda v: "— nenhum —" if v is None else v,
+                    )
+                    loja_atual = meta.get("destinatario_loja")
+                    if pd.isna(loja_atual) or not loja_atual:
+                        loja_atual = None
+                    idx_loja = (
+                        ([None] + lojas).index(loja_atual)
+                        if loja_atual in ([None] + lojas)
+                        else 0
+                    )
+                    nova_loja = st.selectbox(
+                        "Loja",
+                        options=[None] + lojas,
+                        index=idx_loja,
+                        format_func=lambda v: "— nenhuma —" if v is None else v,
                     )
                     salvar_meta = st.form_submit_button(
                         "Salvar alteração",
@@ -7474,6 +7963,8 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
                                             periodo_inicio = :periodo_inicio,
                                             periodo_fim = :periodo_fim,
                                             destinatario_id = :destinatario_id,
+                                            destinatario_tipo = :destinatario_tipo,
+                                            destinatario_loja = :destinatario_loja,
                                             updated_at = NOW()
                                         WHERE id = :id
                                         """
@@ -7493,6 +7984,8 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
                                         "periodo_inicio": novo_inicio,
                                         "periodo_fim": novo_fim,
                                         "destinatario_id": novo_destinatario,
+                                        "destinatario_tipo": novo_tipo,
+                                        "destinatario_loja": nova_loja,
                                         "id": meta["id"],
                                     },
                                 )
@@ -7522,6 +8015,8 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
                         st.rerun()
                     except Exception as erro:
                         st.error(f"Erro ao remover meta: {erro}")
+
+
 
 
 
@@ -7824,9 +8319,16 @@ def salvar_oficina_carro(
     valor_final: str,
     cor: str,
 ) -> None:
+    """
+    Atualiza a oficina e espelha 'onde_esta' no campo 'patio' do estoque
+    quando existir carro com a mesma placa.
+    """
     if not usuario_pode_editar_oficina():
         st.error("Você não pode alterar dados da oficina.")
         return
+
+    onde_limpo = (onde_esta or "").strip() or None
+    placa_norm = normalizar_placa(placa)
 
     try:
         with engine.begin() as conn:
@@ -7848,7 +8350,7 @@ def salvar_oficina_carro(
                     """
                 ),
                 {
-                    "onde_esta": (onde_esta or "").strip() or None,
+                    "onde_esta": onde_limpo,
                     "pronto": bool(pronto),
                     "observacao": (observacao or "").strip() or None,
                     "mecanica": (mecanica or "").strip() or None,
@@ -7860,24 +8362,113 @@ def salvar_oficina_carro(
                 },
             )
 
-            # Gerentes/admins: todas as mudanças.
-            # Vendedores do carro vendido: mudança relacionada a eles.
+            # Espelha localização no estoque (coluna patio).
+            if placa_norm:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE public.estoque_carros
+                        SET patio = :patio
+                        WHERE REPLACE(
+                            REPLACE(UPPER(COALESCE(placa, '')), '-', ''),
+                            ' ',
+                            ''
+                        ) = :placa
+                        """
+                    ),
+                    {"patio": onde_limpo, "placa": placa_norm},
+                )
+
             notificar_usuarios_oficina(
                 conn,
                 titulo="Atualização na oficina",
                 mensagem=(
-                    f"Carro placa {normalizar_placa(placa)} atualizado "
+                    f"Carro placa {placa_norm} atualizado "
                     f"por {usuario.get('nome') or 'usuário'}. "
+                    f"Onde está: {onde_limpo or '-'}. "
                     f"Pronto: {'sim' if pronto else 'não'}."
                 ),
                 placa=placa,
             )
 
-        st.success("Dados da oficina salvos.")
+        st.success("Dados da oficina salvos (pátio do estoque sincronizado).")
         st.cache_data.clear()
         st.rerun()
     except Exception as erro:
         st.error(f"Erro ao salvar oficina: {erro}")
+
+
+
+def importar_carros_estoque_para_oficina(usuario: Dict[str, Any]) -> None:
+    """
+    Empurra para a oficina todos os carros do estoque que ainda não
+    estão cadastrados lá (comparação por placa normalizada).
+    """
+    if not usuario_tem("manage_oficina") and not usuario_e_gerente():
+        st.error("Sem permissão para importar do estoque.")
+        return
+
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(
+                text(
+                    """
+                    INSERT INTO public.oficina_carros (
+                        marca,
+                        modelo,
+                        ano_modelo,
+                        placa,
+                        cor,
+                        onde_esta,
+                        estoque_carro_id,
+                        atualizado_por_id
+                    )
+                    SELECT
+                        COALESCE(e.marca, 'Sem marca'),
+                        COALESCE(e.carro, e.modelo, 'Sem modelo'),
+                        COALESCE(e.ano, '-'),
+                        REPLACE(REPLACE(UPPER(COALESCE(e.placa, '')), '-', ''), ' ', ''),
+                        e.cor,
+                        e.patio,
+                        e.id,
+                        :usuario_id
+                    FROM public.estoque_carros e
+                    WHERE COALESCE(e.placa, '') <> ''
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM public.oficina_carros o
+                          WHERE REPLACE(
+                              REPLACE(UPPER(o.placa), '-', ''),
+                              ' ',
+                              ''
+                          ) = REPLACE(
+                              REPLACE(UPPER(COALESCE(e.placa, '')), '-', ''),
+                              ' ',
+                              ''
+                          )
+                      )
+                    RETURNING id
+                    """
+                ),
+                {"usuario_id": usuario["id"]},
+            )
+            ids = result.fetchall()
+            qtd = len(ids)
+            if qtd:
+                notificar_usuarios_oficina(
+                    conn,
+                    titulo="Importação estoque → oficina",
+                    mensagem=f"{qtd} carro(s) do estoque entraram na oficina.",
+                    placa=None,
+                )
+        if qtd:
+            st.success(f"{qtd} carro(s) importados do estoque para a oficina.")
+            st.cache_data.clear()
+            st.rerun()
+        else:
+            st.info("Nenhum carro novo do estoque para importar.")
+    except Exception as erro:
+        st.error(f"Erro ao importar estoque: {erro}")
 
 
 def pagina_oficina(usuario: Dict[str, Any]) -> None:
@@ -7889,13 +8480,21 @@ def pagina_oficina(usuario: Dict[str, Any]) -> None:
     st.caption(
         "Todos podem consultar e pesquisar. "
         "Gerente, admin, guariba e mecânico editam status, mecânica, "
-        "lataria e valor final."
+        "lataria e valor final. "
+        "'Onde está' sincroniza com o pátio do estoque."
     )
 
     pode_editar = usuario_pode_editar_oficina()
     pode_ver_detalhes = usuario_pode_ver_oficina_detalhes()
 
     if usuario_tem("manage_oficina") or usuario_e_gerente():
+        if st.button(
+            "📥 Importar carros do estoque",
+            use_container_width=True,
+            help="Copia para a oficina os carros do estoque ainda não cadastrados.",
+        ):
+            importar_carros_estoque_para_oficina(usuario)
+
         with st.expander("➕ Cadastrar carro na oficina", expanded=False):
             with st.form("form_novo_carro_oficina", clear_on_submit=True):
                 c1, c2 = st.columns(2)
@@ -7960,9 +8559,9 @@ def pagina_oficina(usuario: Dict[str, Any]) -> None:
                         f"**Valor final:** {carro.get('valor_final') or '-'}"
                     )
                 st.caption(
-                    "Atualizado em "
-                    f"{formatar_data_br(carro.get('updated_at'), True)} "
-                    f"por {carro.get('atualizado_por_nome') or '-'}"
+                    f"**Responsável:** {carro.get('atualizado_por_nome') or '—'} "
+                    f"· Atualizado em "
+                    f"{formatar_data_br(carro.get('updated_at'), True)}"
                 )
 
                 if pode_editar:
