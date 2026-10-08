@@ -4728,7 +4728,7 @@ def mostrar_lista_estoque(
     ):
         carros = grupos[marca]
         with st.expander(
-            f"🚘 {marca} ({len(carros)})",
+            f"{marca} ({len(carros)})",
             expanded=False,
         ):
             for carro in carros:
