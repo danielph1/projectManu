@@ -4747,8 +4747,7 @@ def pagina_estoque(usuario: Dict[str, Any]) -> None:
 
     st.title("Estoque de carros")
     st.caption(
-        "Todos podem consultar. Apenas gerente e documentista "
-        "podem cadastrar, editar, excluir e anexar arquivos."
+        "voce pode acompanhar o estoque dos carros e pesquisar por placa, marca, modelo, cor, placa ou ano."
     )
 
     if usuario_tem("manage_stock"):
