@@ -9313,7 +9313,7 @@ def pagina_whatsapp(usuario: Dict[str, Any]) -> None:
         )
         # Placeholder visual — o QR real vem do serviço Node
         st.info(
-            f"Sessão deste usuário: `user_{usuario['nome']}`. "
+            f"Olá, {usuario['nome']}! "
             "Quando o serviço Node estiver online, o QR aparece aqui."
         )
         # ENVIO REAL (descomente quando o Node estiver rodando):
