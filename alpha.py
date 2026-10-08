@@ -103,14 +103,19 @@ COR_INPUT       = "#1a2330"   # campos de formulário
 st.markdown(
     f"""
     <style>
-    /* ---- esconde chrome do Streamlit (menu, rodapé, Manage app, GitHub) ---- */
-    #MainMenu, header, footer {{visibility: hidden !important; height: 0 !important;}}
-    [data-testid="stToolbar"],
-    [data-testid="stDecoration"],
-    [data-testid="stStatusWidget"],
+    /* ---- chrome Streamlit ----
+       NÃO escondemos o header inteiro: nele fica o botão ☰ que reabre a sidebar.
+       Escondemos só o que polui (Manage app, deploy, GitHub, footer).
+    */
+    #MainMenu {{visibility: hidden !important;}}
+    footer {{visibility: hidden !important; height: 0 !important;}}
+    [data-testid="stToolbar"] {{display: none !important;}}
+    [data-testid="stDecoration"] {{display: none !important;}}
+    [data-testid="stStatusWidget"] {{display: none !important;}}
     .stDeployButton,
     [data-testid="stAppDeployButton"],
-    div[data-testid="stBottomBlockContainer"] a,
+    button[kind="header"],
+    div[data-testid="stBottomBlockContainer"],
     a[href*="github.com"],
     a[href*="streamlit.io"],
     .viewerBadge_container__1QSob,
@@ -118,6 +123,26 @@ st.markdown(
     .viewerBadge_text__1JaDK {{
         display: none !important;
         visibility: hidden !important;
+    }}
+    /* header transparente, só o ☰ da sidebar permanece clicável */
+    header[data-testid="stHeader"] {{
+        background: transparent !important;
+        height: 3rem !important;
+    }}
+    /* botão flutuante extra para reabrir a sidebar no PC/mobile */
+    .manu-reabrir-menu {{
+        position: fixed;
+        top: 0.6rem;
+        left: 0.6rem;
+        z-index: 99999;
+        background: var(--cor-primaria);
+        color: #fff !important;
+        border: none;
+        border-radius: 10px;
+        padding: 0.45rem 0.75rem;
+        font-size: 1rem;
+        cursor: pointer;
+        box-shadow: 0 4px 14px rgba(0,0,0,0.35);
     }}
 
     /* ---- variáveis de cor (usadas no restante do CSS) ---- */
@@ -210,6 +235,12 @@ st.markdown(
         font-size: 0.85rem;
     }}
     </style>
+    <button class="manu-reabrir-menu" onclick="
+      const btn = window.parent.document.querySelector('[data-testid=\'stSidebarCollapsedControl\'] button')
+        || window.parent.document.querySelector('button[kind=\'header\']')
+        || document.querySelector('[data-testid=\'stSidebarCollapsedControl\'] button');
+      if (btn) btn.click();
+    ">☰ Menu</button>
     """,
     unsafe_allow_html=True,
 )
@@ -260,7 +291,7 @@ ROLE_ALIASES = {
     "mecânico": "mecanico",
 }
 
-LOJAS_DISPONIVEIS = ("381", "764", "NINA")
+LOJAS_DISPONIVEIS = ("381", "746", "NINA")
 
 
 def normalizar_loja(loja: Any) -> str:
@@ -453,6 +484,159 @@ def get_engine():
 
 
 engine = get_engine()
+
+
+# ============================================================
+# SUPABASE STORAGE
+# ============================================================
+#
+# Secrets (.streamlit/secrets.toml ou Streamlit Cloud):
+#
+#   [supabase]
+#   url = "https://SEU_PROJETO.supabase.co"
+#   service_role_key = "eyJ..."   # Settings → API → service_role
+#
+# Buckets usados (já existentes no projeto):
+#   manu_arquivos  → fichas, estoque, oficina, transferências
+#   chat           → anexos do chat geral
+#
+# O banco guarda apenas storage_path + storage_bucket (não o binário).
+# ============================================================
+
+STORAGE_BUCKET_ARQUIVOS = "manu_arquivos"
+STORAGE_BUCKET_CHAT = "chat"
+
+
+def _supabase_config() -> tuple[Optional[str], Optional[str]]:
+    try:
+        cfg = st.secrets.get("supabase", {})
+        return cfg.get("url"), cfg.get("service_role_key") or cfg.get("key")
+    except Exception:
+        return None, None
+
+
+def upload_para_storage(
+    bucket: str,
+    caminho: str,
+    conteudo: bytes,
+    mime_type: str = "application/octet-stream",
+) -> Optional[str]:
+    """
+    Envia bytes para o Supabase Storage.
+    Retorna o caminho (path) gravado ou None se falhar / não configurado.
+    """
+    import urllib.request
+    import urllib.error
+
+    base_url, key = _supabase_config()
+    if not base_url or not key:
+        return None
+
+    url = f"{base_url.rstrip('/')}/storage/v1/object/{bucket}/{caminho}"
+    req = urllib.request.Request(
+        url,
+        data=conteudo,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {key}",
+            "apikey": key,
+            "Content-Type": mime_type or "application/octet-stream",
+            "x-upsert": "true",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            if resp.status in {200, 201}:
+                return caminho
+    except urllib.error.HTTPError as erro:
+        # 400 se objeto já existe sem upsert em algumas configs
+        try:
+            detalhe = erro.read().decode("utf-8", errors="ignore")
+        except Exception:
+            detalhe = str(erro)
+        st.warning(f"Storage upload falhou ({erro.code}): {detalhe[:200]}")
+    except Exception as erro:
+        st.warning(f"Storage indisponível: {erro}")
+    return None
+
+
+def url_publica_storage(bucket: str, caminho: str) -> Optional[str]:
+    base_url, _ = _supabase_config()
+    if not base_url or not caminho:
+        return None
+    return f"{base_url.rstrip('/')}/storage/v1/object/public/{bucket}/{caminho}"
+
+
+def url_assinada_storage(
+    bucket: str,
+    caminho: str,
+    expires_sec: int = 3600,
+) -> Optional[str]:
+    """Gera URL assinada (bucket privado). Fallback para pública."""
+    import urllib.request
+    import json
+
+    base_url, key = _supabase_config()
+    if not base_url or not key or not caminho:
+        return url_publica_storage(bucket, caminho)
+
+    url = (
+        f"{base_url.rstrip('/')}/storage/v1/object/sign/"
+        f"{bucket}/{caminho}"
+    )
+    body = json.dumps({"expiresIn": expires_sec}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {key}",
+            "apikey": key,
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            signed = data.get("signedURL") or data.get("signedUrl")
+            if signed:
+                if signed.startswith("http"):
+                    return signed
+                return f"{base_url.rstrip('/')}{signed}"
+    except Exception:
+        pass
+    return url_publica_storage(bucket, caminho)
+
+
+def baixar_do_storage(bucket: str, caminho: str) -> Optional[bytes]:
+    import urllib.request
+
+    base_url, key = _supabase_config()
+    if not base_url or not key or not caminho:
+        return None
+    url = f"{base_url.rstrip('/')}/storage/v1/object/{bucket}/{caminho}"
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {key}", "apikey": key},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return resp.read()
+    except Exception:
+        return None
+
+
+def caminho_storage_unico(prefixo: str, nome_arquivo: str) -> str:
+    """ex.: fichas/123/20261008_a1b2_documento.pdf"""
+    import re as _re
+    from datetime import datetime as _dt
+    import secrets as _secrets
+
+    limpo = _re.sub(r"[^a-zA-Z0-9._-]", "_", nome_arquivo or "arquivo")
+    stamp = _dt.utcnow().strftime("%Y%m%d_%H%M%S")
+    return f"{prefixo}/{stamp}_{_secrets.token_hex(3)}_{limpo}"
+
+
 
 
 # ============================================================
@@ -908,19 +1092,27 @@ def buscar_leads(
 
     termo_limpo = termo_busca.strip()
     if termo_limpo:
+        # Busca tolerante a erros:
+        # 1) ILIKE parcial  2) similaridade pg_trgm (>= 0.3)
+        # Requer: CREATE EXTENSION IF NOT EXISTS pg_trgm;
         filtros.append(
             """
             (
                 l.nome_lead ILIKE :termo
+                OR l.nome_completo ILIKE :termo
                 OR l.cpf ILIKE :termo
                 OR l.telefone ILIKE :termo
                 OR l.observacao ILIKE :termo
                 OR l.carro_selecionado ILIKE :termo
                 OR l.placa_carro ILIKE :termo
+                OR similarity(COALESCE(l.nome_lead, ''), :termo_raw) > 0.3
+                OR similarity(COALESCE(l.nome_completo, ''), :termo_raw) > 0.3
+                OR similarity(COALESCE(l.carro_selecionado, ''), :termo_raw) > 0.25
             )
             """
         )
         parametros["termo"] = f"%{termo_limpo}%"
+        parametros["termo_raw"] = termo_limpo
 
     if vendedor_filtro is not None:
         filtros.append("l.vendedor_id = :vendedor_filtro")
@@ -1010,8 +1202,28 @@ def buscar_leads(
     )
 
     parametros["limite"] = max(min(int(limite), 200), 1)
-    with engine.connect() as conn:
-        return pd.read_sql_query(query, conn, params=parametros)
+    try:
+        with engine.connect() as conn:
+            return pd.read_sql_query(query, conn, params=parametros)
+    except Exception:
+        # Fallback se pg_trgm ainda não foi instalado
+        if "termo_raw" in parametros:
+            filtros_simples = [
+                f for f in str(query).split("WHERE")[0:1]
+            ]
+            # re-executa só com ILIKE removendo similarity
+            query_txt = str(query.text) if hasattr(query, "text") else str(query)
+            query_txt = query_txt.replace(
+                "OR similarity(COALESCE(l.nome_lead, ''), :termo_raw) > 0.3", ""
+            ).replace(
+                "OR similarity(COALESCE(l.nome_completo, ''), :termo_raw) > 0.3", ""
+            ).replace(
+                "OR similarity(COALESCE(l.carro_selecionado, ''), :termo_raw) > 0.25", ""
+            )
+            parametros.pop("termo_raw", None)
+            with engine.connect() as conn:
+                return pd.read_sql_query(text(query_txt), conn, params=parametros)
+        raise
 
 
 def marcar_mensagens_como_lidas(meu_id: int, outro_id: int) -> None:
@@ -1686,7 +1898,11 @@ def salvar_anexos_ficha(
     usuario_id: int,
     arquivos: Any,
 ) -> None:
-    """Persiste os arquivos enviados junto com uma ficha."""
+    """
+    Persiste anexos da ficha.
+    Preferência: Supabase Storage (bucket manu_arquivos).
+    Fallback: arquivo_bytes no Postgres se Storage não estiver configurado.
+    """
     if not arquivos:
         return
 
@@ -1699,6 +1915,12 @@ def salvar_anexos_ficha(
         conteudo = arquivo.getvalue()
         if not conteudo:
             continue
+        nome = getattr(arquivo, "name", None) or "documento"
+        mime = getattr(arquivo, "type", None) or "application/octet-stream"
+        caminho = caminho_storage_unico(f"fichas/{ficha_id}", nome)
+        path_ok = upload_para_storage(
+            STORAGE_BUCKET_ARQUIVOS, caminho, conteudo, mime
+        )
         conn.execute(
             text(
                 """
@@ -1707,6 +1929,8 @@ def salvar_anexos_ficha(
                     nome_arquivo,
                     mime_type,
                     arquivo_bytes,
+                    storage_bucket,
+                    storage_path,
                     enviado_por_id
                 )
                 VALUES (
@@ -1714,21 +1938,20 @@ def salvar_anexos_ficha(
                     :nome_arquivo,
                     :mime_type,
                     :arquivo_bytes,
+                    :storage_bucket,
+                    :storage_path,
                     :usuario_id
                 )
                 """
             ),
             {
                 "ficha_id": ficha_id,
-                "nome_arquivo": (
-                    getattr(arquivo, "name", None)
-                    or "documento"
-                ),
-                "mime_type": (
-                    getattr(arquivo, "type", None)
-                    or "application/octet-stream"
-                ),
-                "arquivo_bytes": conteudo,
+                "nome_arquivo": nome,
+                "mime_type": mime,
+                # se subiu pro storage, não grava binário no banco
+                "arquivo_bytes": None if path_ok else conteudo,
+                "storage_bucket": STORAGE_BUCKET_ARQUIVOS if path_ok else None,
+                "storage_path": path_ok,
                 "usuario_id": usuario_id,
             },
         )
@@ -1743,6 +1966,8 @@ def obter_anexos_ficha(ficha_id: int) -> pd.DataFrame:
             a.nome_arquivo,
             a.mime_type,
             a.arquivo_bytes,
+            a.storage_bucket,
+            a.storage_path,
             a.categoria,
             a.created_at,
             u.nome AS enviado_por
@@ -1789,6 +2014,29 @@ def mostrar_anexos_ficha(
                 if conteudo is None or (
                     isinstance(conteudo, float) and pd.isna(conteudo)
                 ):
+                    conteudo = None
+                # Preferência: baixar do Storage se houver path
+                if not conteudo and anexo.get("storage_path"):
+                    conteudo = baixar_do_storage(
+                        anexo.get("storage_bucket") or STORAGE_BUCKET_ARQUIVOS,
+                        anexo.get("storage_path"),
+                    )
+                if not conteudo:
+                    # link assinado como fallback
+                    link = None
+                    if anexo.get("storage_path"):
+                        link = url_assinada_storage(
+                            anexo.get("storage_bucket") or STORAGE_BUCKET_ARQUIVOS,
+                            anexo.get("storage_path"),
+                        )
+                    nome = anexo.get("nome_arquivo") or "documento"
+                    col_anexo_1, col_anexo_2 = st.columns([3, 1])
+                    col_anexo_1.write(
+                        f"**{nome}** · "
+                        f"{formatar_data_br(anexo.get('created_at'), True)}"
+                    )
+                    if link:
+                        col_anexo_2.markdown(f"[Baixar]({link})")
                     continue
                 nome = anexo.get("nome_arquivo") or "documento"
                 mime = (
@@ -1802,7 +2050,7 @@ def mostrar_anexos_ficha(
                 )
                 col_anexo_2.download_button(
                     "Baixar",
-                    data=conteudo,
+                    data=bytes(conteudo) if not isinstance(conteudo, bytes) else conteudo,
                     file_name=nome,
                     mime=mime,
                     key=f"baixar_anexo_{chave}_{anexo['id']}",
@@ -4456,10 +4704,14 @@ def obter_estoque_carros(busca: str = "") -> pd.DataFrame:
                 OR cor ILIKE :busca
                 OR placa ILIKE :busca
                 OR CAST(ano AS TEXT) ILIKE :busca
+                OR similarity(COALESCE(marca, ''), :busca_raw) > 0.3
+                OR similarity(COALESCE(carro, ''), :busca_raw) > 0.3
+                OR similarity(COALESCE(modelo, ''), :busca_raw) > 0.25
             )
             """
         )
         parametros["busca"] = f"%{busca_limpa}%"
+        parametros["busca_raw"] = busca_limpa
 
     query = text(
         f"""
@@ -4499,6 +4751,7 @@ def salvar_anexos_estoque(
     usuario_id: int,
     arquivos: Any,
 ) -> None:
+    """Anexos do estoque → bucket manu_arquivos (fallback: bytes no DB)."""
     if not arquivos:
         return
 
@@ -4511,38 +4764,68 @@ def salvar_anexos_estoque(
         conteudo = arquivo.getvalue()
         if not conteudo:
             continue
-        conn.execute(
-            text(
-                """
-                INSERT INTO public.estoque_carros_anexos (
-                    carro_id,
-                    nome_arquivo,
-                    mime_type,
-                    arquivo_bytes,
-                    enviado_por_id
-                )
-                VALUES (
-                    :carro_id,
-                    :nome_arquivo,
-                    :mime_type,
-                    :arquivo_bytes,
-                    :usuario_id
-                )
-                """
-            ),
-            {
-                "carro_id": carro_id,
-                "nome_arquivo": (
-                    getattr(arquivo, "name", None) or "documento"
-                ),
-                "mime_type": (
-                    getattr(arquivo, "type", None)
-                    or "application/octet-stream"
-                ),
-                "arquivo_bytes": conteudo,
-                "usuario_id": usuario_id,
-            },
+        nome = getattr(arquivo, "name", None) or "documento"
+        mime = getattr(arquivo, "type", None) or "application/octet-stream"
+        caminho = caminho_storage_unico(f"estoque/{carro_id}", nome)
+        path_ok = upload_para_storage(
+            STORAGE_BUCKET_ARQUIVOS, caminho, conteudo, mime
         )
+        try:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO public.estoque_carros_anexos (
+                        carro_id,
+                        nome_arquivo,
+                        mime_type,
+                        arquivo_bytes,
+                        storage_bucket,
+                        storage_path,
+                        enviado_por_id
+                    )
+                    VALUES (
+                        :carro_id,
+                        :nome_arquivo,
+                        :mime_type,
+                        :arquivo_bytes,
+                        :storage_bucket,
+                        :storage_path,
+                        :usuario_id
+                    )
+                    """
+                ),
+                {
+                    "carro_id": carro_id,
+                    "nome_arquivo": nome,
+                    "mime_type": mime,
+                    "arquivo_bytes": None if path_ok else conteudo,
+                    "storage_bucket": STORAGE_BUCKET_ARQUIVOS if path_ok else None,
+                    "storage_path": path_ok,
+                    "usuario_id": usuario_id,
+                },
+            )
+        except Exception:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO public.estoque_carros_anexos (
+                        carro_id, nome_arquivo, mime_type,
+                        arquivo_bytes, enviado_por_id
+                    )
+                    VALUES (
+                        :carro_id, :nome_arquivo, :mime_type,
+                        :arquivo_bytes, :usuario_id
+                    )
+                    """
+                ),
+                {
+                    "carro_id": carro_id,
+                    "nome_arquivo": nome,
+                    "mime_type": mime,
+                    "arquivo_bytes": conteudo,
+                    "usuario_id": usuario_id,
+                },
+            )
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -7327,37 +7610,89 @@ def salvar_mensagem_chat_geral(
     if not mensagem and not arquivo_bytes:
         return
 
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                """
-                INSERT INTO public.chat_geral_mensagens (
-                    remetente_id,
-                    mensagem,
-                    tipo,
-                    arquivo_nome,
-                    arquivo_mime,
-                    arquivo_bytes
-                )
-                VALUES (
-                    :usuario_id,
-                    :mensagem,
-                    :tipo,
-                    :arquivo_nome,
-                    :arquivo_mime,
-                    :arquivo_bytes
-                )
-                """
-            ),
-            {
-                "usuario_id": usuario_id,
-                "mensagem": mensagem or None,
-                "tipo": tipo,
-                "arquivo_nome": arquivo_nome,
-                "arquivo_mime": arquivo_mime,
-                "arquivo_bytes": arquivo_bytes,
-            },
+    storage_path = None
+    storage_bucket = None
+    bytes_db = arquivo_bytes
+    if arquivo_bytes:
+        caminho = caminho_storage_unico(f"chat/{usuario_id}", arquivo_nome or "anexo")
+        path_ok = upload_para_storage(
+            STORAGE_BUCKET_CHAT, caminho, arquivo_bytes, arquivo_mime or "application/octet-stream"
         )
+        if path_ok:
+            storage_path = path_ok
+            storage_bucket = STORAGE_BUCKET_CHAT
+            bytes_db = None  # não guarda binário no Postgres
+
+    with engine.begin() as conn:
+        try:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO public.chat_geral_mensagens (
+                        remetente_id,
+                        mensagem,
+                        tipo,
+                        arquivo_nome,
+                        arquivo_mime,
+                        arquivo_bytes,
+                        storage_bucket,
+                        storage_path
+                    )
+                    VALUES (
+                        :usuario_id,
+                        :mensagem,
+                        :tipo,
+                        :arquivo_nome,
+                        :arquivo_mime,
+                        :arquivo_bytes,
+                        :storage_bucket,
+                        :storage_path
+                    )
+                    """
+                ),
+                {
+                    "usuario_id": usuario_id,
+                    "mensagem": mensagem or None,
+                    "tipo": tipo,
+                    "arquivo_nome": arquivo_nome,
+                    "arquivo_mime": arquivo_mime,
+                    "arquivo_bytes": bytes_db,
+                    "storage_bucket": storage_bucket,
+                    "storage_path": storage_path,
+                },
+            )
+        except Exception:
+            # fallback se colunas storage_* ainda não existem
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO public.chat_geral_mensagens (
+                        remetente_id,
+                        mensagem,
+                        tipo,
+                        arquivo_nome,
+                        arquivo_mime,
+                        arquivo_bytes
+                    )
+                    VALUES (
+                        :usuario_id,
+                        :mensagem,
+                        :tipo,
+                        :arquivo_nome,
+                        :arquivo_mime,
+                        :arquivo_bytes
+                    )
+                    """
+                ),
+                {
+                    "usuario_id": usuario_id,
+                    "mensagem": mensagem or None,
+                    "tipo": tipo,
+                    "arquivo_nome": arquivo_nome,
+                    "arquivo_mime": arquivo_mime,
+                    "arquivo_bytes": arquivo_bytes,
+                },
+            )
 
 
 def excluir_anexo_chat(
@@ -8406,10 +8741,12 @@ def obter_oficina_carros(busca: str = "") -> pd.DataFrame:
                 OR o.placa ILIKE :busca
                 OR o.cor ILIKE :busca
                 OR o.onde_esta ILIKE :busca
+                OR similarity(COALESCE(o.marca, ''), :busca_raw) > 0.3
+                OR similarity(COALESCE(o.modelo, ''), :busca_raw) > 0.3
             ORDER BY o.updated_at DESC NULLS LAST, o.id DESC
             """
         )
-        parametros = {"busca": f"%{termo}%"}
+        parametros = {"busca": f"%{termo}%", "busca_raw": termo}
     else:
         query = text(
             """
@@ -9054,11 +9391,23 @@ def pagina_whatsapp(usuario: Dict[str, Any]) -> None:
 
     # ---- Filtros de destinatários ----
     st.subheader("Destinatários")
+    # default em session_state evita o placeholder "Choose options" vazio
+    if "wa_status_alvo" not in st.session_state:
+        st.session_state["wa_status_alvo"] = ["aprovados"]
     status_alvo = st.multiselect(
         "Status dos leads",
         options=["aprovados", "negados", "vendidos"],
-        default=["aprovados"],
+        key="wa_status_alvo",
+        format_func=lambda v: {
+            "aprovados": "Aprovados",
+            "negados": "Negados / recusados",
+            "vendidos": "Vendidos",
+        }.get(v, v),
     )
+    if not status_alvo:
+        st.info("Selecione ao menos um status (aprovados, negados ou vendidos).")
+        status_alvo = ["aprovados"]  # evita travar a tela
+
     periodo_wa = st.selectbox(
         "Período",
         ["mes_atual", "mes_anterior", "todos", "personalizado"],
@@ -9095,8 +9444,7 @@ def pagina_whatsapp(usuario: Dict[str, Any]) -> None:
             "(COALESCE(l.venda_concluida, FALSE) = TRUE OR COALESCE(l.vendeu, FALSE) = TRUE)"
         )
     if not conds:
-        st.warning("Selecione ao menos um status.")
-        return
+        conds = ["COALESCE(l.aprovou_credito, FALSE) = TRUE"]
 
     escopo, params = escopo_leads(usuario)
     params = dict(params)
