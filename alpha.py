@@ -63,6 +63,8 @@ def limpar_sessao():
         "fichas_filtro_chave",
         "ficha_detalhe_id",
         "transferencia_aberta_id",
+        "busca_oficina_campo",
+        "busca_oficina_aplicada",
     ]
 
     for chave in chaves_para_limpar:
@@ -110,6 +112,9 @@ ROLE_ALIASES = {
     "documento": "documentista",
     "documentista": "documentista",
     "financeiro": "financeiro",
+    "guariba": "guariba",
+    "mecanico": "mecanico",
+    "mecânico": "mecanico",
 }
 
 LOJAS_DISPONIVEIS = ("381", "746", "NINA")
@@ -177,6 +182,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "view_goals",
         "view_credit_fichas",
         "edit_own_credit_data",
+        "view_oficina",
     },
     "gerente": {
         # O gerente é o superadministrador operacional da loja.
@@ -193,6 +199,9 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "view_goals",
         "view_credit_fichas",
         "edit_bank_results",
+        "edit_sales_boleto",
+        "view_financial",
+        "view_oficina",
     },
     "financeiro": {
         "view_leads",
@@ -206,6 +215,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "view_credit_fichas",
         "edit_sales_boleto",
         "view_credit_metrics",
+        "view_oficina",
     },
     "documentista": {
         "view_leads",
@@ -218,6 +228,28 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "respond_tasks",
         "view_goals",
         "view_credit_fichas",
+        "view_oficina",
+    },
+    # Oficina: sem leads, transferências nem fichas de crédito.
+    "guariba": {
+        "view_stock",
+        "use_chat",
+        "view_tasks",
+        "respond_tasks",
+        "view_goals",
+        "view_oficina",
+        "edit_oficina",
+        "manage_oficina",
+    },
+    "mecanico": {
+        "view_stock",
+        "use_chat",
+        "view_tasks",
+        "respond_tasks",
+        "view_goals",
+        "view_oficina",
+        "edit_oficina",
+        "manage_oficina",
     },
 }
 
@@ -441,6 +473,8 @@ def limpar_sessao():
         "fichas_filtro_chave",
         "ficha_detalhe_id",
         "transferencia_aberta_id",
+        "busca_oficina_campo",
+        "busca_oficina_aplicada",
     ]
 
     for chave in chaves_para_limpar:
@@ -465,6 +499,7 @@ def inicializar_sessao():
         "fichas_limite": 24,
         "fichas_filtro_chave": None,
         "busca_ficha_aplicada": "",
+        "busca_oficina_aplicada": "",
     }
 
     for chave, valor in defaults.items():
@@ -1701,7 +1736,7 @@ def obter_fichas_credito(
         filtro_acesso = "TRUE"
         parametros = {}
 
-    pode_ver_financeiro = usuario["tipo"] in {"financeiro", "gerente"}
+    pode_ver_financeiro = usuario["tipo"] in {"financeiro", "gerente", "elfen_ai"} or usuario_tem("view_financial") or usuario_tem("edit_sales_boleto")
     campos_financeiros = """
             f.valor_entrada,
             f.comprou,
@@ -3475,6 +3510,16 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
                 type="primary" if pagina == "fichas" else "secondary",
             ):
                 st.session_state["pagina_atual"] = "fichas"
+                st.session_state["abrir_formulario"] = False
+                st.rerun()
+
+        if usuario_tem("view_oficina"):
+            if st.button(
+                "Oficina",
+                use_container_width=True,
+                type="primary" if pagina == "oficina" else "secondary",
+            ):
+                st.session_state["pagina_atual"] = "oficina"
                 st.session_state["abrir_formulario"] = False
                 st.rerun()
 
@@ -6107,6 +6152,34 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                     bancos["banco"] == banco_filtro_atual
                 ]
 
+            if bancos.empty and not banco_filtro_atual and usuario_tem("edit_bank_results"):
+                if st.button(
+                    "Inicializar bancos desta ficha",
+                    key=f"init_bancos_{ficha['id']}",
+                    use_container_width=True,
+                ):
+                    try:
+                        with engine.begin() as conn:
+                            for banco_nome in BANCOS_CREDITO:
+                                conn.execute(
+                                    text(
+                                        """
+                                        INSERT INTO public.ficha_bancos (ficha_id, banco)
+                                        VALUES (:ficha_id, :banco)
+                                        ON CONFLICT (ficha_id, banco) DO NOTHING
+                                        """
+                                    ),
+                                    {
+                                        "ficha_id": int(ficha["id"]),
+                                        "banco": banco_nome,
+                                    },
+                                )
+                        st.success("Bancos inicializados.")
+                        st.cache_data.clear()
+                        st.rerun()
+                    except Exception as erro:
+                        st.error(f"Erro ao inicializar bancos: {erro}")
+
             if bancos.empty:
                 st.warning(
                     "Esta ficha não possui análise para o banco selecionado."
@@ -6250,21 +6323,14 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                             if banco.get("observacao"):
                                 st.caption(banco["observacao"])
 
-            pode_ver_financeiro = usuario["tipo"] in {
-                "financeiro",
-                "gerente",
-            }
-            pode_financeiro = (
-                pode_ver_financeiro
-                and usuario_tem("edit_sales_boleto")
+            pode_ver_financeiro = (
+                usuario["tipo"] in {"financeiro", "gerente", "elfen_ai"}
+                or usuario_tem("view_financial")
+                or usuario_tem("edit_sales_boleto")
             )
+            pode_financeiro = usuario_tem("edit_sales_boleto")
 
-            if usuario["tipo"] == "elfen_ai":
-                st.caption(
-                    "Este perfil vê apenas os dados cadastrais, "
-                    "o status da ficha e os resultados dos bancos."
-                )
-            elif pode_ver_financeiro:
+            if pode_ver_financeiro:
                 st.markdown("### Compra e boleto")
             if pode_financeiro:
                 with st.form(f"form_financeiro_ficha_{ficha['id']}"):
@@ -7459,6 +7525,535 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
                         st.error(f"Erro ao remover meta: {erro}")
 
 
+
+# ============================================================
+# OFICINA
+# ============================================================
+
+def normalizar_placa(placa: Any) -> str:
+    return (
+        str(placa or "")
+        .strip()
+        .replace("-", "")
+        .replace(" ", "")
+        .upper()
+    )
+
+
+def usuario_pode_editar_oficina() -> bool:
+    return usuario_tem("edit_oficina") or usuario_tem("manage_oficina")
+
+
+def usuario_pode_ver_oficina_detalhes() -> bool:
+    """Mecânica, lataria e valor final: só oficina + gerente/admin."""
+    return usuario_pode_editar_oficina() or usuario_e_gerente()
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def obter_oficina_carros(busca: str = "") -> pd.DataFrame:
+    termo = (busca or "").strip()
+    if termo:
+        query = text(
+            """
+            SELECT
+                o.id,
+                o.marca,
+                o.modelo,
+                o.ano_modelo,
+                o.placa,
+                o.cor,
+                o.onde_esta,
+                o.pronto,
+                o.observacao,
+                o.mecanica,
+                o.lataria,
+                o.valor_final,
+                o.estoque_carro_id,
+                o.created_at,
+                o.updated_at,
+                o.atualizado_por_id,
+                u.nome AS atualizado_por_nome
+            FROM public.oficina_carros o
+            LEFT JOIN public.usuarios u ON u.id = o.atualizado_por_id
+            WHERE
+                o.marca ILIKE :busca
+                OR o.modelo ILIKE :busca
+                OR o.ano_modelo ILIKE :busca
+                OR o.placa ILIKE :busca
+                OR o.cor ILIKE :busca
+                OR o.onde_esta ILIKE :busca
+            ORDER BY o.updated_at DESC NULLS LAST, o.id DESC
+            """
+        )
+        parametros = {"busca": f"%{termo}%"}
+    else:
+        query = text(
+            """
+            SELECT
+                o.id,
+                o.marca,
+                o.modelo,
+                o.ano_modelo,
+                o.placa,
+                o.cor,
+                o.onde_esta,
+                o.pronto,
+                o.observacao,
+                o.mecanica,
+                o.lataria,
+                o.valor_final,
+                o.estoque_carro_id,
+                o.created_at,
+                o.updated_at,
+                o.atualizado_por_id,
+                u.nome AS atualizado_por_nome
+            FROM public.oficina_carros o
+            LEFT JOIN public.usuarios u ON u.id = o.atualizado_por_id
+            ORDER BY o.updated_at DESC NULLS LAST, o.id DESC
+            """
+        )
+        parametros = {}
+
+    with engine.connect() as conn:
+        return pd.read_sql_query(query, conn, params=parametros)
+
+
+def notificar_usuarios_oficina(
+    conn: Any,
+    titulo: str,
+    mensagem: str,
+    placa: Optional[str] = None,
+    somente_gerentes: bool = False,
+) -> None:
+    """
+    Notifica gerentes/admins sempre.
+    Se houver placa e vendedores ligados a leads vendidos com essa placa,
+    também notifica esses vendedores (via usuarios.vendedor_id).
+    """
+    placa_norm = normalizar_placa(placa) if placa else None
+
+    if somente_gerentes:
+        filtro_extra = "FALSE"
+        params = {"titulo": titulo, "mensagem": mensagem}
+    elif placa_norm:
+        filtro_extra = """
+            u.vendedor_id IN (
+                SELECT DISTINCT l.vendedor_id
+                FROM public.leads l
+                WHERE REPLACE(REPLACE(UPPER(COALESCE(l.placa_carro, '')), '-', ''), ' ', '') = :placa
+                  AND (
+                    COALESCE(l.venda_concluida, FALSE) = TRUE
+                    OR COALESCE(l.vendeu, FALSE) = TRUE
+                  )
+                  AND l.vendedor_id IS NOT NULL
+            )
+        """
+        params = {
+            "titulo": titulo,
+            "mensagem": mensagem,
+            "placa": placa_norm,
+        }
+    else:
+        # Carro novo / sem vínculo de venda: notifica todos os ativos
+        # (exceto quem já entra pelo grupo gerente/oficina abaixo).
+        filtro_extra = "TRUE"
+        params = {"titulo": titulo, "mensagem": mensagem}
+
+    conn.execute(
+        text(
+            f"""
+            INSERT INTO public.notificacoes (
+                usuario_id,
+                tipo,
+                titulo,
+                mensagem
+            )
+            SELECT
+                u.id,
+                'oficina',
+                :titulo,
+                :mensagem
+            FROM public.usuarios u
+            WHERE COALESCE(u.ativo, TRUE) = TRUE
+              AND (
+                    REGEXP_REPLACE(
+                        LOWER(COALESCE(u.tipo, '')),
+                        '[^a-z0-9]',
+                        '',
+                        'g'
+                    ) IN (
+                        'gerente',
+                        'admin',
+                        'administrador',
+                        'dono',
+                        'owner',
+                        'proprietario'
+                    )
+                    OR ({filtro_extra})
+              )
+            """
+        ),
+        params,
+    )
+
+
+def cadastrar_carro_oficina(
+    usuario: Dict[str, Any],
+    marca: str,
+    modelo: str,
+    ano_modelo: str,
+    placa: str,
+    cor: str = "",
+) -> None:
+    if not usuario_tem("manage_oficina") and not usuario_e_gerente():
+        st.error("Você não pode cadastrar carros na oficina.")
+        return
+
+    marca = (marca or "").strip()
+    modelo = (modelo or "").strip()
+    ano_modelo = (ano_modelo or "").strip()
+    placa_norm = normalizar_placa(placa)
+    cor = (cor or "").strip() or None
+
+    if not marca or not modelo or not ano_modelo or not placa_norm:
+        st.error("Informe marca, modelo, ano/modelo e placa.")
+        return
+
+    try:
+        with engine.begin() as conn:
+            existente = conn.execute(
+                text(
+                    """
+                    SELECT id
+                    FROM public.oficina_carros
+                    WHERE REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = :placa
+                    LIMIT 1
+                    """
+                ),
+                {"placa": placa_norm},
+            ).scalar()
+
+            estoque_id = conn.execute(
+                text(
+                    """
+                    SELECT id
+                    FROM public.estoque_carros
+                    WHERE REPLACE(REPLACE(UPPER(COALESCE(placa, '')), '-', ''), ' ', '') = :placa
+                    LIMIT 1
+                    """
+                ),
+                {"placa": placa_norm},
+            ).scalar()
+
+            if existente:
+                st.warning("Já existe um carro na oficina com essa placa.")
+                return
+
+            carro_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO public.oficina_carros (
+                        marca,
+                        modelo,
+                        ano_modelo,
+                        placa,
+                        cor,
+                        estoque_carro_id,
+                        atualizado_por_id
+                    )
+                    VALUES (
+                        :marca,
+                        :modelo,
+                        :ano_modelo,
+                        :placa,
+                        :cor,
+                        :estoque_carro_id,
+                        :usuario_id
+                    )
+                    RETURNING id
+                    """
+                ),
+                {
+                    "marca": marca,
+                    "modelo": modelo,
+                    "ano_modelo": ano_modelo,
+                    "placa": placa_norm,
+                    "cor": cor,
+                    "estoque_carro_id": int(estoque_id) if estoque_id else None,
+                    "usuario_id": usuario["id"],
+                },
+            ).scalar_one()
+
+            # Placa nova (não estava na oficina): notifica todos.
+            notificar_usuarios_oficina(
+                conn,
+                titulo="Novo carro na oficina",
+                mensagem=(
+                    f"{marca} {modelo} ({ano_modelo}) placa {placa_norm} "
+                    "entrou na oficina."
+                ),
+                placa=None,
+            )
+
+            if estoque_id:
+                notificar_usuarios_oficina(
+                    conn,
+                    titulo="Carro do estoque na oficina",
+                    mensagem=(
+                        f"O carro placa {placa_norm} (já no estoque) "
+                        "foi adicionado à oficina."
+                    ),
+                    placa=None,
+                )
+
+        st.success("Carro cadastrado na oficina.")
+        st.cache_data.clear()
+        st.rerun()
+    except Exception as erro:
+        st.error(f"Erro ao cadastrar carro na oficina: {erro}")
+
+
+def salvar_oficina_carro(
+    usuario: Dict[str, Any],
+    carro_id: int,
+    placa: str,
+    onde_esta: str,
+    pronto: bool,
+    observacao: str,
+    mecanica: str,
+    lataria: str,
+    valor_final: str,
+    cor: str,
+) -> None:
+    if not usuario_pode_editar_oficina():
+        st.error("Você não pode alterar dados da oficina.")
+        return
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    UPDATE public.oficina_carros
+                    SET
+                        onde_esta = :onde_esta,
+                        pronto = :pronto,
+                        observacao = :observacao,
+                        mecanica = :mecanica,
+                        lataria = :lataria,
+                        valor_final = :valor_final,
+                        cor = :cor,
+                        atualizado_por_id = :usuario_id,
+                        updated_at = NOW()
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    "onde_esta": (onde_esta or "").strip() or None,
+                    "pronto": bool(pronto),
+                    "observacao": (observacao or "").strip() or None,
+                    "mecanica": (mecanica or "").strip() or None,
+                    "lataria": (lataria or "").strip() or None,
+                    "valor_final": (valor_final or "").strip() or None,
+                    "cor": (cor or "").strip() or None,
+                    "usuario_id": usuario["id"],
+                    "id": carro_id,
+                },
+            )
+
+            # Gerentes/admins: todas as mudanças.
+            # Vendedores do carro vendido: mudança relacionada a eles.
+            notificar_usuarios_oficina(
+                conn,
+                titulo="Atualização na oficina",
+                mensagem=(
+                    f"Carro placa {normalizar_placa(placa)} atualizado "
+                    f"por {usuario.get('nome') or 'usuário'}. "
+                    f"Pronto: {'sim' if pronto else 'não'}."
+                ),
+                placa=placa,
+            )
+
+        st.success("Dados da oficina salvos.")
+        st.cache_data.clear()
+        st.rerun()
+    except Exception as erro:
+        st.error(f"Erro ao salvar oficina: {erro}")
+
+
+def pagina_oficina(usuario: Dict[str, Any]) -> None:
+    if not usuario_tem("view_oficina"):
+        st.error("Você não tem permissão para acessar a oficina.")
+        return
+
+    st.title("Oficina")
+    st.caption(
+        "Todos podem consultar e pesquisar. "
+        "Gerente, admin, guariba e mecânico editam status, mecânica, "
+        "lataria e valor final."
+    )
+
+    pode_editar = usuario_pode_editar_oficina()
+    pode_ver_detalhes = usuario_pode_ver_oficina_detalhes()
+
+    if usuario_tem("manage_oficina") or usuario_e_gerente():
+        with st.expander("➕ Cadastrar carro na oficina", expanded=False):
+            with st.form("form_novo_carro_oficina", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                marca = c1.text_input("Marca*")
+                modelo = c2.text_input("Modelo*")
+                c3, c4 = st.columns(2)
+                ano_modelo = c3.text_input("Ano/modelo*")
+                placa = c4.text_input("Placa*")
+                cor = st.text_input("Cor")
+                salvar = st.form_submit_button(
+                    "Cadastrar",
+                    use_container_width=True,
+                    type="primary",
+                )
+            if salvar:
+                cadastrar_carro_oficina(
+                    usuario,
+                    marca,
+                    modelo,
+                    ano_modelo,
+                    placa,
+                    cor,
+                )
+
+    aba_lista, aba_pesquisa = st.tabs(["Carros", "Pesquisar"])
+
+    def render_lista(df: pd.DataFrame, chave: str) -> None:
+        if df.empty:
+            st.info("Nenhum carro encontrado na oficina.")
+            return
+
+        for _, carro in df.iterrows():
+            status = "✅ Pronto" if bool(carro.get("pronto")) else "🔧 Em andamento"
+            titulo = (
+                f"{status} · {carro.get('marca') or '-'} "
+                f"{carro.get('modelo') or '-'} "
+                f"({carro.get('ano_modelo') or '-'}) · "
+                f"Placa {carro.get('placa') or '-'}"
+            )
+            with st.expander(titulo, expanded=False):
+                col_a, col_b, col_c = st.columns(3)
+                col_a.write(f"**Marca:** {carro.get('marca') or '-'}")
+                col_b.write(f"**Modelo:** {carro.get('modelo') or '-'}")
+                col_c.write(f"**Ano/modelo:** {carro.get('ano_modelo') or '-'}")
+                col_a.write(f"**Placa:** {carro.get('placa') or '-'}")
+                col_b.write(f"**Cor:** {carro.get('cor') or '-'}")
+                col_c.write(
+                    f"**Onde está:** {carro.get('onde_esta') or '-'}"
+                )
+                st.write(
+                    f"**Observação:** {carro.get('observacao') or '-'}"
+                )
+                if pode_ver_detalhes:
+                    st.markdown("---")
+                    st.write(
+                        f"**Mecânica:** {carro.get('mecanica') or '-'}"
+                    )
+                    st.write(
+                        f"**Lataria:** {carro.get('lataria') or '-'}"
+                    )
+                    st.write(
+                        f"**Valor final:** {carro.get('valor_final') or '-'}"
+                    )
+                st.caption(
+                    "Atualizado em "
+                    f"{formatar_data_br(carro.get('updated_at'), True)} "
+                    f"por {carro.get('atualizado_por_nome') or '-'}"
+                )
+
+                if pode_editar:
+                    with st.form(f"form_oficina_{chave}_{carro['id']}"):
+                        onde_esta = st.text_input(
+                            "Onde está",
+                            value=str(carro.get("onde_esta") or ""),
+                        )
+                        pronto = st.checkbox(
+                            "Pronto",
+                            value=bool(carro.get("pronto")),
+                        )
+                        observacao = st.text_area(
+                            "Observação",
+                            value=str(carro.get("observacao") or ""),
+                        )
+                        mecanica = st.text_area(
+                            "Mecânica",
+                            value=str(carro.get("mecanica") or ""),
+                        )
+                        lataria = st.text_area(
+                            "Lataria",
+                            value=str(carro.get("lataria") or ""),
+                        )
+                        valor_final = st.text_input(
+                            "Valor final",
+                            value=str(carro.get("valor_final") or ""),
+                        )
+                        cor_edit = st.text_input(
+                            "Cor",
+                            value=str(carro.get("cor") or ""),
+                        )
+                        gravar = st.form_submit_button(
+                            "Salvar alterações",
+                            use_container_width=True,
+                            type="primary",
+                        )
+                    if gravar:
+                        salvar_oficina_carro(
+                            usuario,
+                            int(carro["id"]),
+                            str(carro.get("placa") or ""),
+                            onde_esta,
+                            pronto,
+                            observacao,
+                            mecanica,
+                            lataria,
+                            valor_final,
+                            cor_edit,
+                        )
+
+    with aba_lista:
+        try:
+            render_lista(obter_oficina_carros(), "lista")
+        except Exception as erro:
+            st.error(
+                "Não foi possível carregar a oficina. "
+                "Execute schema_oficina.sql no Supabase. "
+                f"Detalhe: {erro}"
+            )
+
+    with aba_pesquisa:
+        with st.form("form_pesquisa_oficina"):
+            busca_digitada = st.text_input(
+                "Pesquisar na oficina",
+                placeholder="Placa, marca, modelo, ano ou cor",
+                key="busca_oficina_campo",
+            )
+            pesquisar = st.form_submit_button(
+                "Pesquisar",
+                use_container_width=True,
+            )
+        if pesquisar:
+            st.session_state["busca_oficina_aplicada"] = busca_digitada
+        busca = st.session_state.get("busca_oficina_aplicada", "")
+        if not busca.strip():
+            st.info(
+                "Digite placa, marca, modelo, ano ou cor para pesquisar."
+            )
+        else:
+            try:
+                render_lista(
+                    obter_oficina_carros(busca),
+                    "pesquisa",
+                )
+            except Exception as erro:
+                st.error(f"Erro ao pesquisar oficina: {erro}")
+
+
+
 # ============================================================
 # EXECUÇÃO PRINCIPAL
 # ============================================================
@@ -7472,7 +8067,10 @@ usuario_atual = st.session_state["usuario_logado"]
 mostrar_sidebar(usuario_atual)
 
 
-paginas_permitidas = {"leads"}
+paginas_permitidas = set()
+
+if usuario_tem("view_leads"):
+    paginas_permitidas.add("leads")
 
 if usuario_tem("view_stock"):
     paginas_permitidas.add("estoque")
@@ -7489,15 +8087,26 @@ if usuario_tem("use_chat"):
 if usuario_tem("view_credit_fichas"):
     paginas_permitidas.add("fichas")
 
+if usuario_tem("view_oficina"):
+    paginas_permitidas.add("oficina")
+
 if usuario_tem("view_tasks"):
     paginas_permitidas.add("tarefas")
 
 if usuario_tem("view_goals"):
     paginas_permitidas.add("metas")
 
+if not paginas_permitidas:
+    paginas_permitidas.add("chat")
+
+pagina_padrao = (
+    "oficina"
+    if usuario_atual["tipo"] in {"guariba", "mecanico"}
+    else ("leads" if "leads" in paginas_permitidas else next(iter(paginas_permitidas)))
+)
 
 if st.session_state["pagina_atual"] not in paginas_permitidas:
-    st.session_state["pagina_atual"] = "leads"
+    st.session_state["pagina_atual"] = pagina_padrao
 
 
 pagina_atual = st.session_state["pagina_atual"]
@@ -7517,6 +8126,8 @@ elif pagina_atual == "chat":
     pagina_chat(usuario_atual)
 elif pagina_atual == "fichas":
     pagina_fichas(usuario_atual)
+elif pagina_atual == "oficina":
+    pagina_oficina(usuario_atual)
 elif pagina_atual == "tarefas":
     pagina_tarefas(usuario_atual)
 elif pagina_atual == "metas":
