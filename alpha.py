@@ -9114,7 +9114,6 @@ def pagina_oficina(usuario: Dict[str, Any]) -> None:
                 ano_modelo = c3.text_input("Ano/modelo*")
                 placa = c4.text_input("Placa*")
                 cor = st.text_input("Cor")
-                onde_esta = st.text_input("onde esta")
                 salvar = st.form_submit_button(
                     "Cadastrar",
                     use_container_width=True,
@@ -9128,7 +9127,6 @@ def pagina_oficina(usuario: Dict[str, Any]) -> None:
                     ano_modelo,
                     placa,
                     cor,
-                    onde_esta,
                 )
 
     aba_lista, aba_pesquisa = st.tabs(["Carros", "Pesquisar"])
