@@ -79,7 +79,6 @@ st.set_page_config(
     page_title="Manu Automoveis",
     page_icon="📊",
     layout="wide",
-    # Esconde o menu padrão e o rodapé (GitHub / Made with Streamlit)
     initial_sidebar_state="expanded",
 )
 
@@ -91,7 +90,7 @@ COR_FUNDO       = "#0b0f14"   # fundo geral da página
 COR_SIDEBAR     = "#121820"   # barra lateral
 COR_CARD        = "#161d27"   # cards / expanders
 COR_BORDA       = "#243041"   # bordas sutis
-COR_PRIMARIA    = "#3b82f6"   # botão ativo / destaque (azul, sem laranja)
+COR_PRIMARIA    = "#3b82f6"   # botão ativo / destaque
 COR_PRIMARIA_2  = "#2563eb"   # hover do botão ativo
 COR_SUCESSO     = "#22c55e"   # aprovado / pronto
 COR_AVISO       = "#eab308"   # pendente
@@ -103,49 +102,17 @@ COR_INPUT       = "#1a2330"   # campos de formulário
 st.markdown(
     f"""
     <style>
-    /* ---- chrome Streamlit ----
-       NÃO escondemos o header inteiro: nele fica o botão ☰ que reabre a sidebar.
-       Escondemos só o que polui (Manage app, deploy, GitHub, footer).
-    */
-    #MainMenu {{visibility: hidden !important;}}
+    /* Só esconde o que polui o rodapé: GitHub + "Made with Streamlit" / coroa.
+       Sidebar e header ficam 100% normais (botão nativo de recolher/expandir). */
     footer {{visibility: hidden !important; height: 0 !important;}}
-    [data-testid="stToolbar"] {{display: none !important;}}
-    [data-testid="stDecoration"] {{display: none !important;}}
-    [data-testid="stStatusWidget"] {{display: none !important;}}
-    .stDeployButton,
-    [data-testid="stAppDeployButton"],
-    button[kind="header"],
-    div[data-testid="stBottomBlockContainer"],
-    a[href*="github.com"],
-    a[href*="streamlit.io"],
+    a[href*="github.com"] {{display: none !important;}}
+    a[href*="streamlit.io"] {{display: none !important;}}
     .viewerBadge_container__1QSob,
     .viewerBadge_link__1SLeB,
     .viewerBadge_text__1JaDK {{
         display: none !important;
-        visibility: hidden !important;
-    }}
-    /* header transparente, só o ☰ da sidebar permanece clicável */
-    header[data-testid="stHeader"] {{
-        background: transparent !important;
-        height: 3rem !important;
-    }}
-    /* botão flutuante extra para reabrir a sidebar no PC/mobile */
-    .manu-reabrir-menu {{
-        position: fixed;
-        top: 0.6rem;
-        left: 0.6rem;
-        z-index: 99999;
-        background: var(--cor-primaria);
-        color: #fff !important;
-        border: none;
-        border-radius: 10px;
-        padding: 0.45rem 0.75rem;
-        font-size: 1rem;
-        cursor: pointer;
-        box-shadow: 0 4px 14px rgba(0,0,0,0.35);
     }}
 
-    /* ---- variáveis de cor (usadas no restante do CSS) ---- */
     :root {{
         --cor-fundo: {COR_FUNDO};
         --cor-sidebar: {COR_SIDEBAR};
@@ -169,11 +136,7 @@ st.markdown(
         background-color: var(--cor-sidebar) !important;
         border-right: 1px solid var(--cor-borda) !important;
     }}
-    [data-testid="stSidebar"] * {{
-        color: var(--cor-texto) !important;
-    }}
 
-    /* botão primary = cor de destaque */
     div.stButton > button[kind="primary"],
     button[data-testid="baseButton-primary"] {{
         background-color: var(--cor-primaria) !important;
@@ -186,22 +149,12 @@ st.markdown(
         border-color: var(--cor-primaria-2) !important;
     }}
 
-    /* cards / expanders */
     [data-testid="stExpander"] {{
         background: var(--cor-card) !important;
         border: 1px solid var(--cor-borda) !important;
         border-radius: 12px !important;
     }}
 
-    /* inputs */
-    .stTextInput input, .stNumberInput input, .stSelectbox div[data-baseweb="select"] > div,
-    .stTextArea textarea, .stDateInput input {{
-        background-color: var(--cor-input) !important;
-        color: var(--cor-texto) !important;
-        border-color: var(--cor-borda) !important;
-    }}
-
-    /* reações compactas no chat */
     .chat-reacao-resumo {{
         display: inline-flex;
         gap: 6px;
@@ -216,8 +169,6 @@ st.markdown(
         border-radius: 999px;
         padding: 2px 8px;
     }}
-
-    /* cards de vendedor (equipe) */
     .vendedor-card {{
         background: var(--cor-card);
         border: 1px solid var(--cor-borda);
@@ -226,21 +177,9 @@ st.markdown(
         margin-bottom: 10px;
         min-height: 120px;
     }}
-    .vendedor-card h4 {{
-        margin: 0 0 6px 0;
-        color: var(--cor-texto);
-    }}
-    .vendedor-card .muted {{
-        color: var(--cor-texto-muted);
-        font-size: 0.85rem;
-    }}
+    .vendedor-card h4 {{ margin: 0 0 6px 0; color: var(--cor-texto); }}
+    .vendedor-card .muted {{ color: var(--cor-texto-muted); font-size: 0.85rem; }}
     </style>
-    <button class="manu-reabrir-menu" onclick="
-      const btn = window.parent.document.querySelector('[data-testid=\'stSidebarCollapsedControl\'] button')
-        || window.parent.document.querySelector('button[kind=\'header\']')
-        || document.querySelector('[data-testid=\'stSidebarCollapsedControl\'] button');
-      if (btn) btn.click();
-    ">☰ Menu</button>
     """,
     unsafe_allow_html=True,
 )
