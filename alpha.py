@@ -10276,8 +10276,8 @@ def html_autorizacao_faturamento(dados: dict) -> str:
 <table>
   <tr><td class="secao">II. OUTRAS OBSERVAÇÕES</td></tr>
   <tr><td>
-    IPVA 2026 POR CONTA DA {"LOJA" if dados.get("ipva_conta_loja") else "CLIENTE"}<br/>
-    TRANSFERÊNCIA POR CONTA DO {"LOJA" if dados.get("transferencia_conta_loja") else "CLIENTE"}<br/>
+    IPVA 2026 POR CONTA DO: {"LOJA" if dados.get("ipva_conta_loja") else "CLIENTE"}<br/>
+    TRANSFERÊNCIA POR CONTA D{"A LOJA" if dados.get("transferencia_conta_loja") else "O CLIENTE"}<br/>
     GARANTIA DE MOTOR E CAIXA DE MARCHA POR 90 DIAS OU 3 MIL KM RODADOS
     (KM A PARTIR DA SAÍDA DA LOJA)<br/>
     FOI CEDIDO UM DESCONTO NO VALOR DE R$ {money('desconto_valor')}<br/>
