@@ -4,3 +4,8 @@ psycopg[binary]
 sqlalchemy
 requests
 extra_streamlit_components
+streamlit>=1.28
+streamlit-echarts>=0.4.0
+sqlalchemy>=2.0
+pandas>=2.0
+psycopg2-binary>=2.9
