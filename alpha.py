@@ -11425,8 +11425,6 @@ def _fallback_sem_api(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> 
 
     return (
         f"Tô aqui, {nome}. Sem a chave de IA nos secrets eu fico limitado e repetitivo — "
-        "não é a experiência que a gente quer. Peça pro admin colocar:\n\n"
-        "```\n[xai]\napi_key = \"xai-...\"\nmodel = \"grok-3\"\n```\n\n"
         "Enquanto isso: manda o que você precisa em uma frase que eu ajudo no básico."
     )
 
