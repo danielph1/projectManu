@@ -11373,25 +11373,23 @@ def _fallback_sem_api(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> 
     p = (pergunta or "").lower()
 
     if any(x in p for x in ("quem é você", "quem e voce", "quem voce", "quem eh", "quem foi")):
-        return "sou Suporte Manu Automóveis"
+        return "sou Manu Automóveis seu suporte pessoal!"
     if any(x in p for x in ("quem te criou", "quem criou")):
-        return "Nasci pra te ajudar e caso precise de um amigo"
+        return "Nasci pra te ajudar e caso precise de um amigo!"
 
     # desabafo
     if any(
         x in p
         for x in (
-            "não estou", "nao estou", "mal", "triste", "ruim", "amigo",
-            "cansad", "ansied", "desabafo", "legal",
+            "não estou bem", "nao estou legal", "mal", "triste", "ruim", "amigo",
+            "cansad", "ansied", "desabafo", "legal", "psicologico"
         )
     ):
         return (
-            f"{nome}, valeu por falar isso. Não precisa estar bem pra conversar comigo. "
+            f"{nome}, sei que está puxado, mas não desanime! sempre há um novo dia! quer conferir como melhorar seu desemprenho?"
             "Dia pesado e venda travada doem de verdade — não é frescura. "
             "Respira um pouco. Eu continuo aqui se quiser desabafar mais ou se depois "
             "quiser montar um passo leve pro trabalho.\n\n"
-            "_Obs: pra eu responder com IA completa (não esse modo básico), "
-            "o admin precisa configurar a chave Gemini (grátis) nos secrets._"
         )
 
     # tenta puxar métricas do contexto pra algo útil
