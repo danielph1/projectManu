@@ -2461,6 +2461,8 @@ def obter_fichas_credito(
             f.boleto_valor,
             f.boleto_meses,
             f.boleto_total,
+            f.fin_meses,
+            f.fin_valor_parcela,
     """ if pode_ver_financeiro else """
             NULL::numeric AS valor_entrada,
             NULL::boolean AS comprou,
@@ -2476,6 +2478,8 @@ def obter_fichas_credito(
             NULL::numeric AS boleto_valor,
             NULL::integer AS boleto_meses,
             NULL::numeric AS boleto_total,
+            NULL::integer AS fin_meses,
+            NULL::numeric AS fin_valor_parcela,
     """
 
     filtro_status = """
@@ -3028,6 +3032,8 @@ def salvar_dados_financeiros_ficha(
     gerou_boleto: bool,
     boleto_valor: Optional[float],
     boleto_meses: Optional[int],
+    fin_meses: Optional[int] = None,
+    fin_valor_parcela: Optional[float] = None,
 ) -> None:
     pode_alterar = usuario_tem("edit_sales_boleto")
 
@@ -3044,11 +3050,17 @@ def salvar_dados_financeiros_ficha(
         entrada_paga = 0
         valor_pendente = 0
         gerou_boleto = False
+        fin_meses = None
+        fin_valor_parcela = None
     else:
         entrada_total = max(float(entrada_total or 0), 0)
         entrada_paga = max(float(entrada_paga or 0), 0)
         valor_liberado = max(float(valor_liberado or 0), 0)
         valor_pendente = max(entrada_total - entrada_paga, 0)
+        fin_meses = int(fin_meses) if fin_meses else None
+        fin_valor_parcela = (
+            max(float(fin_valor_parcela or 0), 0) if fin_valor_parcela else None
+        )
 
     if not gerou_boleto:
         boleto_valor = None
@@ -3088,6 +3100,8 @@ def salvar_dados_financeiros_ficha(
                         boleto_valor = :boleto_valor,
                         boleto_meses = :boleto_meses,
                         boleto_total = :boleto_total,
+                        fin_meses = :fin_meses,
+                        fin_valor_parcela = :fin_valor_parcela,
                         atualizado_por_id = :usuario_id,
                         updated_at = NOW()
                     WHERE id = :ficha_id
@@ -3106,6 +3120,8 @@ def salvar_dados_financeiros_ficha(
                     "boleto_valor": boleto_valor,
                     "boleto_meses": boleto_meses,
                     "boleto_total": boleto_total,
+                    "fin_meses": fin_meses,
+                    "fin_valor_parcela": fin_valor_parcela,
                     "usuario_id": usuario["id"],
                     "ficha_id": ficha["id"],
                 },
@@ -3130,11 +3146,21 @@ def salvar_dados_financeiros_ficha(
             )
 
             if comprou:
+                nome_cli = (
+                    ficha.get("nome_completo")
+                    or ficha.get("nome_lead")
+                    or "cliente"
+                )
                 criar_notificacao_vendedor(
                     ficha.get("vendedor_id"),
                     int(ficha["id"]),
-                    f"Compra atualizada: {ficha['nome_lead']}",
-                    "Os dados de compra da sua ficha foram atualizados.",
+                    f"Venda confirmada — faturar: {nome_cli}",
+                    (
+                        f"ElfenAI/financeiro marcou compra na ficha #{int(ficha['id'])}. "
+                        f"Abra Faturamento: os dados da venda já vêm pré-preenchidos "
+                        f"(banco, entrada, boletos). Você ainda pode criar faturamento "
+                        f"manual para venda à vista."
+                    ),
                     conn,
                 )
 
@@ -7469,11 +7495,15 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
             if pode_ver_financeiro:
                 st.markdown("### Compra e boleto")
             if pode_financeiro:
+                # Checkbox FORA do form → desbloqueia os campos na hora (Streamlit)
+                key_comprou = f"comprou_check_{ficha['id']}"
+                if key_comprou not in st.session_state:
+                    st.session_state[key_comprou] = bool(ficha.get("comprou"))
+                comprou = st.checkbox(
+                    "Cliente comprou?",
+                    key=key_comprou,
+                )
                 with st.form(f"form_financeiro_ficha_{ficha['id']}"):
-                    comprou = st.checkbox(
-                        "Cliente comprou?",
-                        value=bool(ficha.get("comprou")),
-                    )
                     analises_aprovadas = (
                         bancos_todos[
                             bancos_todos["status"] == "aprovado"
@@ -7549,8 +7579,37 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                         "Valor pendente calculado: "
                         f"R$ {max(entrada_total - entrada_paga, 0):,.2f}"
                     )
+
+                    # Financiamento contratado (separado de boleto de entrada)
+                    st.caption("Financiamento no banco (parcelas do contrato)")
+                    fm1, fm2 = st.columns(2)
+                    opcoes_meses = [0, 24, 36, 48, 60]
+                    fin_meses_atual = inteiro_seguro(ficha.get("fin_meses"), 0)
+                    if fin_meses_atual not in opcoes_meses:
+                        opcoes_meses = sorted(set(opcoes_meses + [fin_meses_atual]))
+                    fin_meses = fm1.selectbox(
+                        "Meses do financiamento",
+                        options=opcoes_meses,
+                        index=opcoes_meses.index(fin_meses_atual)
+                        if fin_meses_atual in opcoes_meses
+                        else 0,
+                        format_func=lambda m: (
+                            "Selecione" if m == 0 else f"{m}x"
+                        ),
+                        disabled=not comprou,
+                        help="24x, 36x, 48x ou 60x — não é quantidade de boletos.",
+                    )
+                    fin_valor_parcela = fm2.number_input(
+                        "Valor da parcela do financiamento R$",
+                        min_value=0.0,
+                        value=numero_seguro(ficha.get("fin_valor_parcela")),
+                        step=50.0,
+                        disabled=not comprou,
+                        help="Parcela mensal do contrato no banco.",
+                    )
+
                     gerou_boleto = st.checkbox(
-                        "Gerou boleto?",
+                        "Gerou boleto? (entrada / complemento)",
                         value=bool(ficha.get("gerou_boleto")),
                         disabled=not comprou,
                     )
@@ -7595,6 +7654,10 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                         gerou_boleto,
                         boleto_valor if gerou_boleto else None,
                         boleto_meses if gerou_boleto else None,
+                        fin_meses=fin_meses if comprou and fin_meses else None,
+                        fin_valor_parcela=(
+                            fin_valor_parcela if comprou else None
+                        ),
                     )
             elif pode_ver_financeiro:
                 st.write(
@@ -9842,6 +9905,8 @@ def carregar_venda_para_faturamento(ficha_id: int) -> dict:
             f.boleto_valor,
             f.boleto_meses,
             f.boleto_total,
+            f.fin_meses,
+            f.fin_valor_parcela,
             f.valor_entrada AS valor_entrada_ficha,
             v.nome AS vendedor_nome
         FROM public.fichas_credito f
@@ -9856,7 +9921,9 @@ def carregar_venda_para_faturamento(ficha_id: int) -> dict:
     if not row:
         return {}
     dados = dict(row)
-    # Observação automática de boletos (editável 1x depois)
+
+    # Boleto da venda → campo "Boleto (entrada) R$" + texto em observações
+    # (NÃO vai para Qtd. parcelas / Valor parcela do financiamento)
     obs_boleto = ""
     if dados.get("gerou_boleto") and dados.get("boleto_meses"):
         try:
@@ -9867,11 +9934,29 @@ def carregar_venda_para_faturamento(ficha_id: int) -> dict:
                 f"Observação: boleto de R$ {bt:,.2f}. "
                 f"{bm}x de R$ {bv:,.2f}."
             ).replace(",", "X").replace(".", ",").replace("X", ".")
+            dados["entrada_boleto_sugerida"] = bv  # valor unitário no campo entrada
         except Exception:
             obs_boleto = ""
+            dados["entrada_boleto_sugerida"] = 0.0
+    else:
+        dados["entrada_boleto_sugerida"] = 0.0
+
     dados["observacoes"] = obs_boleto
-    dados["fin_parcelas"] = dados.get("boleto_meses")
-    dados["fin_valor_parcela"] = dados.get("boleto_valor")
+
+    # Financiamento vem de "Cliente comprou" (fin_meses / fin_valor_parcela)
+    # — NÃO de boleto e NÃO de ficha_bancos.
+    dados["fin_parcelas"] = (
+        int(dados["fin_meses"]) if dados.get("fin_meses") else None
+    )
+    try:
+        dados["fin_valor_parcela"] = (
+            float(dados["fin_valor_parcela"])
+            if dados.get("fin_valor_parcela") is not None
+            else None
+        )
+    except Exception:
+        dados["fin_valor_parcela"] = None
+
     return dados
 
 
@@ -10126,18 +10211,67 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
 
     pre: dict = {}
     ficha_sel = None
+
+    # Prefill vindo de notificação / query string interna
+    prefill_id = st.session_state.pop("faturamento_ficha_prefill", None)
+
+    # Vendas do vendedor ainda sem faturamento (atalhos)
+    if usuario.get("tipo") == "vendedor" and usuario.get("vendedor_id") and not vendas.empty:
+        try:
+            with engine.connect() as conn:
+                pend = pd.read_sql_query(
+                    text(
+                        """
+                        SELECT f.id AS ficha_id,
+                               COALESCE(l.nome_completo, l.nome_lead) AS nome
+                        FROM public.fichas_credito f
+                        JOIN public.leads l ON l.id = f.lead_id
+                        WHERE COALESCE(f.comprou, FALSE) = TRUE
+                          AND f.vendedor_id = :vid
+                          AND NOT EXISTS (
+                              SELECT 1 FROM public.faturamentos ft
+                              WHERE ft.ficha_id = f.id
+                          )
+                        ORDER BY f.data_compra DESC NULLS LAST
+                        LIMIT 10
+                        """
+                    ),
+                    conn,
+                    params={"vid": int(usuario["vendedor_id"])},
+                )
+            if not pend.empty:
+                st.info(
+                    "Vendas confirmadas aguardando faturamento — clique para pré-preencher:"
+                )
+                cols = st.columns(min(len(pend), 4))
+                for i, row in pend.iterrows():
+                    with cols[i % len(cols)]:
+                        if st.button(
+                            f"#{int(row['ficha_id'])} {row['nome'][:18]}",
+                            key=f"fat_pend_{int(row['ficha_id'])}",
+                            use_container_width=True,
+                        ):
+                            st.session_state["faturamento_ficha_prefill"] = int(row["ficha_id"])
+                            st.rerun()
+        except Exception:
+            pass
+
     if not vendas.empty:
         opcoes = [None] + vendas["ficha_id"].tolist()
-        nomes = {None: "— escolha uma venda —"}
+        nomes = {None: "— escolha uma venda (ou à vista manual) —"}
         for _, r in vendas.iterrows():
             nomes[r["ficha_id"]] = (
                 f"#{r['ficha_id']} {r['nome']} · {r.get('placa') or '-'} · "
                 f"{r.get('carro') or ''} {r.get('ano_modelo') or ''} · "
                 f"{r.get('vendedor_nome') or ''}"
             )
+        default_ix = 0
+        if prefill_id and prefill_id in opcoes:
+            default_ix = opcoes.index(prefill_id)
         ficha_sel = st.selectbox(
             "Puxar dados de uma venda (ficha comprou)",
             options=opcoes,
+            index=default_ix,
             format_func=lambda i: nomes.get(i, str(i)),
         )
         if ficha_sel:
@@ -10145,7 +10279,11 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
             if not pre:
                 st.warning("Venda não encontrada ou ainda não marcada como comprou.")
     else:
-        st.info("Nenhuma venda (ficha com comprou=true) encontrada.")
+        st.info(
+            "Nenhuma venda (comprou=true) no sistema. "
+            "Para venda à vista sem ficha, peça ao admin para marcar a compra na ficha "
+            "ou cadastre a venda antes."
+        )
 
     # total entrada fixo da venda (não recalcula a partir dos pedaços até o usuário editar)
     entrada_total_venda = float(pre.get("entrada_total") or 0)
@@ -10191,7 +10329,13 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
         ent_cred = n3.number_input("Crédito R$", min_value=0.0, step=100.0, value=0.0)
         n4, n5, n6 = st.columns(3)
         ent_pix = n4.number_input("PIX/Transferência R$", min_value=0.0, step=100.0, value=0.0)
-        ent_bol = n5.number_input("Boleto (entrada) R$", min_value=0.0, step=100.0, value=0.0)
+        ent_bol = n5.number_input(
+            "Boleto (entrada) R$",
+            min_value=0.0,
+            step=100.0,
+            value=float(pre.get("entrada_boleto_sugerida") or 0),
+            help="Valor do boleto informado na compra (não é parcela do financiamento).",
+        )
         n6.metric("Total entrada (venda)", f"R$ {entrada_total_venda:,.2f}")
 
         st.subheader("Veículo na troca (opcional)")
@@ -10210,13 +10354,15 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
             "Qtd. parcelas*",
             min_value=0,
             step=1,
-            value=int(pre.get("fin_parcelas") or pre.get("boleto_meses") or 0),
+            value=int(pre.get("fin_parcelas") or 0),
+            help="Parcelas do financiamento (análise do banco), não quantidade de boletos.",
         )
         fin_val = f3.number_input(
             "Valor parcela R$*",
             min_value=0.0,
             step=50.0,
-            value=float(pre.get("fin_valor_parcela") or pre.get("boleto_valor") or 0),
+            value=float(pre.get("fin_valor_parcela") or 0),
+            help="Valor da parcela do financiamento aprovado no banco.",
         )
         valor_lib = st.number_input(
             "Valor liberado/financiado R$*",
@@ -10270,13 +10416,10 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
         if faltando:
             st.error("Campos obrigatórios faltando: " + ", ".join(faltando))
             return
-        if not ficha_sel:
-            st.error("Selecione uma venda (ficha comprou).")
-            return
-
+        # ficha_sel opcional: venda à vista sem passar pelo ElfenAI
         dados = {
             "lead_id": pre.get("lead_id"),
-            "ficha_id": int(ficha_sel),
+            "ficha_id": int(ficha_sel) if ficha_sel else None,
             "nome": nome.strip(),
             "cpf_cnpj": cpf.strip(),
             "endereco": endereco.strip(),
