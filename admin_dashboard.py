@@ -1076,19 +1076,72 @@ def _resposta_especialista_local(pergunta: str, contexto: str) -> str:
     )
 
 
-def _chamar_xai_dash(mensagens: list, sistema: str) -> Optional[str]:
-    import json
-    import urllib.request
+def _dash_secret(*path: str):
     try:
-        xai = st.secrets.get("xai", {})
-        key = xai.get("api_key") if hasattr(xai, "get") else None
-        if not key:
-            key = st.secrets.get("XAI_API_KEY")
-        model = (xai.get("model") if hasattr(xai, "get") else None) or "grok-3"
+        cur = st.secrets
+        for p in path:
+            cur = cur.get(p) if hasattr(cur, "get") else cur[p]
+            if cur is None:
+                return None
+        return str(cur) if cur else None
     except Exception:
         return None
+
+
+def _chamar_gemini_dash(mensagens: list, sistema: str):
+    import json
+    import urllib.request
+    import urllib.error
+    key = _dash_secret("gemini", "api_key") or _dash_secret("GEMINI_API_KEY")
+    if not key:
+        return None, "sem gemini"
+    model = _dash_secret("gemini", "model") or "gemini-2.0-flash"
+    contents = []
+    for m in mensagens:
+        role = m.get("role") or "user"
+        grole = "model" if role == "assistant" else "user"
+        contents.append({"role": grole, "parts": [{"text": m.get("content") or ""}]})
+    if contents and contents[-1]["role"] != "user":
+        contents.append({"role": "user", "parts": [{"text": "(continue)"}]})
+    payload = {
+        "systemInstruction": {"parts": [{"text": sistema}]},
+        "contents": contents,
+        "generationConfig": {"temperature": 0.85, "maxOutputTokens": 1024},
+    }
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model}:generateContent?key={key}"
+    )
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+        texto = "".join(p.get("text", "") for p in parts).strip()
+        return (texto or None), (None if texto else "vazio")
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8")[:200]
+        except Exception:
+            body = str(e)
+        return None, f"Gemini {e.code}: {body}"
+    except Exception as e:
+        return None, str(e)
+
+
+def _chamar_xai_dash(mensagens: list, sistema: str):
+    import json
+    import urllib.request
+    import urllib.error
+    key = _dash_secret("xai", "api_key") or _dash_secret("XAI_API_KEY")
     if not key:
         return None
+    model = _dash_secret("xai", "model") or "grok-3"
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": sistema}] + mensagens,
@@ -1105,24 +1158,37 @@ def _chamar_xai_dash(mensagens: list, sistema: str) -> Optional[str]:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=75) as resp:
+        with urllib.request.urlopen(req, timeout=90) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return data["choices"][0]["message"]["content"]
     except Exception:
         return None
 
 
+def _chamar_ia_dash(mensagens: list, sistema: str):
+    """Gemini primeiro (grátis), depois xAI."""
+    txt, err = _chamar_gemini_dash(mensagens, sistema)
+    if txt:
+        return txt
+    return _chamar_xai_dash(mensagens, sistema)
+
+
 def secao_ia_especialista(loja: str, di: date, dfim: date) -> None:
     st.markdown("---")
     st.subheader("Suporte especialista (funil · finanças · previsão)")
     try:
-        _k = st.secrets.get("xai", {}).get("api_key") or st.secrets.get("XAI_API_KEY")
+        _k = (
+            st.secrets.get("gemini", {}).get("api_key")
+            or st.secrets.get("GEMINI_API_KEY")
+            or st.secrets.get("xai", {}).get("api_key")
+            or st.secrets.get("XAI_API_KEY")
+        )
     except Exception:
         _k = None
     if not _k:
         st.warning(
-            "Sem xai.api_key nos Secrets a conversa fica básica. "
-            "Configure a chave para especialista de verdade."
+            "Sem chave de IA. Nos Secrets use [gemini] api_key "
+            "(grátis em aistudio.google.com/apikey) e Reboot."
         )
     else:
         st.caption(
@@ -1157,7 +1223,7 @@ def secao_ia_especialista(loja: str, di: date, dfim: date) -> None:
                 {"role": m["role"], "content": m["content"]}
                 for m in st.session_state["dash_ia_msgs"][-12:]
             ]
-            ans = _chamar_xai_dash(hist, sistema)
+            ans = _chamar_ia_dash(hist, sistema)
             if not ans:
                 ans = _resposta_especialista_local(q, ctx)
             ph.markdown(ans)

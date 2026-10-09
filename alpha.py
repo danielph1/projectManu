@@ -11011,15 +11011,29 @@ def _login_eh_daniel(usuario: Dict[str, Any]) -> bool:
     return login == "daniel" or nome == "daniel"
 
 
-def _tem_chave_xai() -> bool:
+def _secret_get(*path: str) -> Optional[str]:
+    """Lê st.secrets aninhado com segurança."""
     try:
-        xai = st.secrets.get("xai", {})
-        key = xai.get("api_key") if hasattr(xai, "get") else None
-        if not key:
-            key = st.secrets.get("XAI_API_KEY")
-        return bool(key)
+        cur = st.secrets
+        for p in path:
+            if hasattr(cur, "get"):
+                cur = cur.get(p)
+            else:
+                cur = cur[p]
+            if cur is None:
+                return None
+        return str(cur) if cur else None
     except Exception:
-        return False
+        return None
+
+
+def _tem_chave_ia() -> bool:
+    return bool(
+        _secret_get("gemini", "api_key")
+        or _secret_get("GEMINI_API_KEY")
+        or _secret_get("xai", "api_key")
+        or _secret_get("XAI_API_KEY")
+    )
 
 
 def _amostra_leads_texto(usuario: Dict[str, Any], limite: int = 8) -> str:
@@ -11175,24 +11189,82 @@ CONTEXTO AO VIVO DO USUÁRIO (banco filtrado):
 """
 
 
-def _chamar_xai_chat(mensagens: list, sistema: str) -> Tuple[Optional[str], Optional[str]]:
-    """Retorna (resposta, erro_opcional)."""
+def _chamar_gemini(mensagens: list, sistema: str) -> Tuple[Optional[str], Optional[str]]:
+    """Google Gemini (gratuito no AI Studio)."""
     import json
     import urllib.request
     import urllib.error
 
-    try:
-        xai = st.secrets.get("xai", {})
-        key = xai.get("api_key") if hasattr(xai, "get") else None
-        if not key:
-            key = st.secrets.get("XAI_API_KEY")
-        model = (xai.get("model") if hasattr(xai, "get") else None) or "grok-3"
-    except Exception:
-        return None, "secrets xai ausente"
-
+    key = _secret_get("gemini", "api_key") or _secret_get("GEMINI_API_KEY")
     if not key:
-        return None, "sem api_key"
+        return None, "sem gemini api_key"
+    model = (
+        _secret_get("gemini", "model")
+        or "gemini-2.0-flash"
+    )
+    # Monta contents no formato Gemini (system à parte)
+    contents = []
+    for m in mensagens:
+        role = m.get("role") or "user"
+        # Gemini usa "user" | "model"
+        grole = "model" if role == "assistant" else "user"
+        contents.append({
+            "role": grole,
+            "parts": [{"text": m.get("content") or ""}],
+        })
+    # Garante que a última é user
+    if contents and contents[-1]["role"] != "user":
+        contents.append({"role": "user", "parts": [{"text": "(continue)"}]})
 
+    payload = {
+        "systemInstruction": {"parts": [{"text": sistema}]},
+        "contents": contents,
+        "generationConfig": {
+            "temperature": 0.9,
+            "maxOutputTokens": 1024,
+        },
+    }
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model}:generateContent?key={key}"
+    )
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        parts = (
+            data.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [])
+        )
+        texto = "".join(p.get("text", "") for p in parts).strip()
+        if not texto:
+            return None, f"resposta vazia gemini: {str(data)[:180]}"
+        return texto, None
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8")[:250]
+        except Exception:
+            body = str(e)
+        return None, f"Gemini HTTP {e.code}: {body}"
+    except Exception as e:
+        return None, f"Gemini: {e}"
+
+
+def _chamar_xai(mensagens: list, sistema: str) -> Tuple[Optional[str], Optional[str]]:
+    import json
+    import urllib.request
+    import urllib.error
+
+    key = _secret_get("xai", "api_key") or _secret_get("XAI_API_KEY")
+    if not key:
+        return None, "sem xai api_key"
+    model = _secret_get("xai", "model") or "grok-3"
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": sistema}] + mensagens,
@@ -11214,12 +11286,39 @@ def _chamar_xai_chat(mensagens: list, sistema: str) -> Tuple[Optional[str], Opti
         return data["choices"][0]["message"]["content"], None
     except urllib.error.HTTPError as e:
         try:
-            body = e.read().decode("utf-8")[:200]
+            body = e.read().decode("utf-8")[:250]
         except Exception:
             body = str(e)
-        return None, f"HTTP {e.code}: {body}"
+        return None, f"xAI HTTP {e.code}: {body}"
     except Exception as e:
-        return None, str(e)
+        return None, f"xAI: {e}"
+
+
+def _chamar_ia(mensagens: list, sistema: str) -> Tuple[Optional[str], Optional[str], str]:
+    """
+    Ordem: Gemini (grátis) → xAI.
+    Retorna (texto, erro, provedor_usado).
+    """
+    # Preferência explícita nos secrets: provider = "gemini" | "xai"
+    pref = (_secret_get("ia", "provider") or "gemini").strip().lower()
+    ordem = ["gemini", "xai"] if pref != "xai" else ["xai", "gemini"]
+    erros = []
+    for prov in ordem:
+        if prov == "gemini":
+            txt, err = _chamar_gemini(mensagens, sistema)
+        else:
+            txt, err = _chamar_xai(mensagens, sistema)
+        if txt:
+            return txt, None, prov
+        if err:
+            erros.append(err)
+    return None, " | ".join(erros) if erros else "nenhum provedor", "none"
+
+
+def _chamar_xai_chat(mensagens: list, sistema: str) -> Tuple[Optional[str], Optional[str]]:
+    """Compat: retorna (texto, erro)."""
+    txt, err, _prov = _chamar_ia(mensagens, sistema)
+    return txt, err
 
 
 def _fallback_sem_api(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> str:
@@ -11249,7 +11348,7 @@ def _fallback_sem_api(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> 
             "Respira um pouco. Eu continuo aqui se quiser desabafar mais ou se depois "
             "quiser montar um passo leve pro trabalho.\n\n"
             "_Obs: pra eu responder com IA completa (não esse modo básico), "
-            "o admin precisa configurar a chave xAI nos secrets._"
+            "o admin precisa configurar a chave Gemini (grátis) nos secrets._"
         )
 
     # tenta puxar métricas do contexto pra algo útil
@@ -11272,7 +11371,7 @@ def _fallback_sem_api(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> 
             f"— prefere manhã ou tarde?\"\n\n"
             f"Troca [nome]/[carro] pelo lead. "
             f"{amostra}\n\n"
-            f"_Modo básico sem API — com chave xAI eu monto scripts bem mais afiados._"
+            f"_Modo básico sem API — com chave Gemini eu monto scripts bem mais afiados._"
         )
 
     if any(x in p for x in ("evoluir", "melhorar", "lead", "vender", "progresso")):
@@ -11282,7 +11381,7 @@ def _fallback_sem_api(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> 
             "Caminho simples: (1) 3 follow-ups em quem não respondeu, "
             "(2) 1 ligação em quem está aprovado, "
             "(3) uma mensagem boa por dia — qualidade > volume.\n\n"
-            "_Ative a API xAI nos secrets pra eu ser suporte de verdade, não esse resumo seco._"
+            "_Ative Gemini nos secrets pra eu ser suporte de verdade, não esse resumo seco._"
         )
 
     return (
@@ -11296,12 +11395,14 @@ def _fallback_sem_api(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> 
 def pagina_suporte_ia(usuario: Dict[str, Any]) -> None:
     st.title("Suporte Manu Automóveis")
 
-    tem_api = _tem_chave_xai()
+    tem_api = _tem_chave_ia()
     if not tem_api:
         st.warning(
-            "**IA completa desligada.** Sem `xai.api_key` nos Secrets do Streamlit "
-            "as respostas ficam básicas. Coloque a chave para suporte de verdade "
-            "(conversa livre, scripts, conselhos)."
+            "**IA completa desligada.** Nos Secrets do Streamlit coloque:\n\n"
+            "[gemini]\n"
+            "api_key = AIza...\n"
+            "model = gemini-2.0-flash\n\n"
+            "Chave grátis: https://aistudio.google.com/apikey — depois Reboot."
         )
     else:
         st.caption("IA ativa · conversa livre · dados só do seu acesso")
