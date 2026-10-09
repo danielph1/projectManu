@@ -10237,7 +10237,7 @@ def html_autorizacao_faturamento(dados: dict) -> str:
   </tr>
   <tr>
     <td colspan="5"><b>KILOMETRAGEM:</b> {v('kilometragem')}
-      &nbsp;&nbsp; <i>(completar a caneta se necessário)</i></td>
+      &nbsp;&nbsp;</td>
   </tr>
 </table>
 <br/>
