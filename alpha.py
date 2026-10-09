@@ -4366,17 +4366,14 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
                 st.session_state["pagina_atual"] = "chat"
                 st.rerun()
 
-        # Manu Automóveis Suporte (IA)
-        if usuario_tem("view_ia_suporte") or usuario_e_gestor() or usuario.get("tipo") in {
-            "vendedor", "marketing", "elfen_ai", "financeiro", "documentista",
-        }:
-            if st.button(
-                "Suporte IA",
-                use_container_width=True,
-                type="primary" if pagina == "suporte_ia" else "secondary",
-            ):
-                st.session_state["pagina_atual"] = "suporte_ia"
-                st.rerun()
+        # Manu Automóveis Suporte (IA) — todos os funcionários
+        if st.button(
+            "Suporte IA",
+            use_container_width=True,
+            type="primary" if pagina == "suporte_ia" else "secondary",
+        ):
+            st.session_state["pagina_atual"] = "suporte_ia"
+            st.rerun()
 
         if usuario_tem("view_goals"):
             if st.button(
@@ -11003,202 +11000,375 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
 # SUPORTE IA — Manu Automóveis Suporte
 # ============================================================
 #
-# Chat de ajuda para o usuário logado.
-# - Contexto do banco APENAS do próprio escopo (vendedor = só dele)
-# - Não modifica dados, não expõe outros vendedores
-# - Identidade: "Manu Automóveis Suporte"
-# - Se houver st.secrets["xai"]["api_key"] usa API Grok; senão responde
-#   com análise local dos números do usuário.
+# Chat amigável para TODOS os funcionários.
+# Escopo de dados:
+#   admin     → global (sem restrição de loja/vendedor)
+#   gerente   → só a loja dele
+#   marketing → global, mas NÃO fala de código/infra
+#   demais    → só dados ligados a si (vendedor_id / destinatário)
+#
+# Identidade: "Manu Automóveis Suporte"
+# Não gera imagens, não altera banco/código.
 # ============================================================
 
-def _contexto_usuario_para_ia(usuario: Dict[str, Any]) -> str:
-    """Monta texto com métricas e pendências só do escopo do usuário."""
-    linhas = [
-        f"Usuário: {usuario.get('nome')} | tipo: {usuario.get('tipo')} | loja: {usuario.get('loja')}",
-    ]
-    tipo = usuario.get("tipo")
-    try:
-        # Período: este mês
-        hoje = date.today()
-        di = hoje.replace(day=1)
-        metricas = obter_metricas(usuario, data_inicio=di, data_fim=hoje)
-        linhas.append(
-            f"Métricas deste mês (escopo do usuário): "
-            f"leads={metricas.get('total_leads', 0)}, "
-            f"responderam={metricas.get('total_responderam', 0)}, "
-            f"fichas={metricas.get('total_fichas', 0)}, "
-            f"aprovados={metricas.get('total_aprovados', 0)}, "
-            f"vendidos={metricas.get('total_vendidos', 0)}"
-        )
-    except Exception as erro:
-        linhas.append(f"(métricas indisponíveis: {erro})")
+def _parse_metricas_do_texto(contexto: str) -> Dict[str, int]:
+    out = {
+        "leads": 0, "responderam": 0, "fichas": 0,
+        "aprovados": 0, "vendidos": 0,
+    }
+    for chave in out:
+        token = f"{chave}="
+        if token in contexto:
+            try:
+                pedaco = contexto.split(token, 1)[1].split(",")[0].split()[0]
+                out[chave] = int("".join(c for c in pedaco if c.isdigit() or c == "-") or 0)
+            except Exception:
+                pass
+    return out
 
-    # Leads sem resposta (só do escopo)
+
+def _contexto_usuario_para_ia(usuario: Dict[str, Any]) -> str:
+    """Contexto rico, sempre filtrado ao papel do usuário."""
+    tipo = str(usuario.get("tipo") or "")
+    nome = usuario.get("nome") or "colega"
+    loja = usuario.get("loja") or "?"
+    linhas = [
+        f"Funcionário: {nome}",
+        f"Perfil: {tipo} | Loja cadastrada: {loja}",
+    ]
+    hoje = date.today()
+    di_mes = hoje.replace(day=1)
+    di_2m = (di_mes - timedelta(days=1)).replace(day=1)
+    # 2 meses atrás início
+    try:
+        y, m = di_mes.year, di_mes.month - 2
+        while m <= 0:
+            m += 12
+            y -= 1
+        di_2m = date(y, m, 1)
+    except Exception:
+        di_2m = di_mes - timedelta(days=60)
+
+    # --- métricas conforme escopo ---
+    try:
+        if tipo == "admin":
+            # global: usa usuário admin (escopo TRUE)
+            m_mes = obter_metricas(usuario, data_inicio=di_mes, data_fim=hoje)
+            m_2m = obter_metricas(usuario, data_inicio=di_2m, data_fim=hoje)
+            linhas.append(
+                f"Métricas GLOBAIS deste mês: leads={m_mes.get('total_leads',0)}, "
+                f"responderam={m_mes.get('total_responderam',0)}, "
+                f"fichas={m_mes.get('total_fichas',0)}, "
+                f"aprovados={m_mes.get('total_aprovados',0)}, "
+                f"vendidos={m_mes.get('total_vendidos',0)}"
+            )
+            linhas.append(
+                f"Métricas GLOBAIS últimos ~2 meses: leads={m_2m.get('total_leads',0)}, "
+                f"responderam={m_2m.get('total_responderam',0)}, "
+                f"fichas={m_2m.get('total_fichas',0)}, "
+                f"aprovados={m_2m.get('total_aprovados',0)}, "
+                f"vendidos={m_2m.get('total_vendidos',0)}"
+            )
+        elif tipo == "gerente":
+            m_mes = obter_metricas(usuario, data_inicio=di_mes, data_fim=hoje)
+            m_2m = obter_metricas(usuario, data_inicio=di_2m, data_fim=hoje)
+            linhas.append(
+                f"Métricas da LOJA {loja} deste mês: leads={m_mes.get('total_leads',0)}, "
+                f"responderam={m_mes.get('total_responderam',0)}, "
+                f"fichas={m_mes.get('total_fichas',0)}, "
+                f"aprovados={m_mes.get('total_aprovados',0)}, "
+                f"vendidos={m_mes.get('total_vendidos',0)}"
+            )
+            linhas.append(
+                f"Métricas da LOJA {loja} ~2 meses: leads={m_2m.get('total_leads',0)}, "
+                f"vendidos={m_2m.get('total_vendidos',0)}"
+            )
+        elif tipo == "marketing":
+            m_mes = obter_metricas(usuario, data_inicio=di_mes, data_fim=hoje)
+            linhas.append(
+                f"Métricas (visão marketing/global) mês: leads={m_mes.get('total_leads',0)}, "
+                f"responderam={m_mes.get('total_responderam',0)}, "
+                f"fichas={m_mes.get('total_fichas',0)}, "
+                f"vendidos={m_mes.get('total_vendidos',0)}"
+            )
+            linhas.append("Marketing: pode falar de leads/campanhas; NÃO de código ou infraestrutura.")
+        else:
+            m_mes = obter_metricas(usuario, data_inicio=di_mes, data_fim=hoje)
+            linhas.append(
+                f"Métricas DESTE usuário no mês: leads={m_mes.get('total_leads',0)}, "
+                f"responderam={m_mes.get('total_responderam',0)}, "
+                f"fichas={m_mes.get('total_fichas',0)}, "
+                f"aprovados={m_mes.get('total_aprovados',0)}, "
+                f"vendidos={m_mes.get('total_vendidos',0)}"
+            )
+    except Exception as erro:
+        linhas.append(f"(métricas: {erro})")
+
+    # amostra leads sem resposta (escopo já filtrado por obter/buscar)
     try:
         df = buscar_leads(
-            usuario, "nao_responderam", "", limite=15,
-            data_inicio=di, data_fim=hoje,
+            usuario, "nao_responderam", "", limite=10,
+            data_inicio=di_mes, data_fim=hoje,
         )
         if not df.empty:
-            nomes = df.get("nome_lead", df.get("nome_completo", pd.Series())).head(8).tolist()
-            linhas.append(
-                f"Leads sem resposta recentes (amostra, só seus): {nomes}"
-            )
-            linhas.append(f"Total sem resposta no filtro: {len(df)}")
+            col = "nome_lead" if "nome_lead" in df.columns else "nome_completo"
+            nomes = [str(x) for x in df[col].head(6).tolist()]
+            linhas.append(f"Leads sem resposta (amostra do seu escopo): {nomes}")
     except Exception:
         pass
 
-    # Tarefas pendentes do usuário
+    # tarefas próprias / visíveis
     try:
         tar = obter_tarefas(usuario)
         if not tar.empty:
-            pend = tar[tar["resposta"].isna()] if "resposta" in tar.columns else tar
-            linhas.append(f"Tarefas visíveis: {len(tar)} | pendentes de resposta: {len(pend)}")
+            pend = tar[tar["resposta"].isna()] if "resposta" in tar.columns else tar.head(0)
+            ok = tar[tar["resposta"] == True] if "resposta" in tar.columns else tar.head(0)
+            linhas.append(
+                f"Tarefas no seu escopo: total={len(tar)}, "
+                f"pendentes={len(pend)}, concluídas={len(ok)}"
+            )
     except Exception:
         pass
 
-    if tipo == "vendedor":
-        linhas.append(
-            "REGRAS: este usuário é vendedor. Nunca mencione dados de outros vendedores. "
-            "Sugira ações práticas: follow-up WhatsApp, priorizar cliente na loja, "
-            "completar ficha, revisar negados."
-        )
-    elif tipo in {"admin", "gerente", "marketing"}:
-        linhas.append(
-            "Usuário gestor: pode falar de visão geral da loja/escopo dele, "
-            "sem inventar números fora do contexto fornecido."
-        )
-    else:
-        linhas.append(
-            "Responda só sobre o que for relevante ao perfil "
-            f"({tipo}): estoque, oficina, documentos, crédito, etc."
-        )
+    # oficina: se guariba/mecanico, carros recentes (sem forçar outros dados sensíveis)
+    if tipo in {"guariba", "mecanico", "mecânico"}:
+        try:
+            with engine.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        """
+                        SELECT marca, modelo, placa, onde_esta, pronto,
+                               LEFT(COALESCE(observacao,''), 80) AS obs
+                        FROM public.oficina_carros
+                        ORDER BY updated_at DESC
+                        LIMIT 8
+                        """
+                    )
+                ).mappings().all()
+            if rows:
+                resumo = [
+                    f"{r['marca']} {r['modelo']} ({r['placa']}) "
+                    f"onde={r['onde_esta']} pronto={r['pronto']}"
+                    for r in rows
+                ]
+                linhas.append("Oficina (amostra recente): " + " | ".join(resumo))
+        except Exception as erro:
+            linhas.append(f"(oficina: {erro})")
 
     linhas.append(
-        "Você NÃO pode alterar banco de dados, código ou permissões. "
-        "Apenas orientar e responder perguntas."
+        "REGRAS FIXAS: identidade = Manu Automóveis Suporte. "
+        "Não gera imagens. Não altera banco nem código. "
+        "Não inventa número que não esteja neste contexto. "
+        "Tom: amigo de trabalho, acolhedor, direto."
     )
     return "\n".join(linhas)
 
 
+def _sistema_prompt_ia(usuario: Dict[str, Any], contexto: str) -> str:
+    tipo = str(usuario.get("tipo") or "")
+    base = (
+        "Você é **Manu Automóveis Suporte**, o melhor amigo de trabalho "
+        "dos funcionários da Manu Automóveis (loja de carros).\n"
+        "Quando perguntarem quem você é: diga que é Manu Automóveis Suporte.\n"
+        "Tom: caloroso, leve, brasileiro, sem enrolação.\n"
+        "Pode conversar sobre trabalho, carros, dicas de venda, oficina, "
+        "e também assuntos do dia a dia (cansaço, estresse, papo leve) — "
+        "com empatia, sem substituir médico/psicólogo.\n"
+        "NÃO gera imagens. NÃO altera dados, código ou permissões.\n"
+        "NÃO invente métricas: use só o CONTEXTO abaixo.\n"
+        "Se não souber, diga com honestidade.\n"
+    )
+    if tipo == "admin":
+        base += (
+            "Este usuário é ADMIN: pode receber visão completa dos números do contexto, "
+            "análise de problemas e sugestões de gestão.\n"
+        )
+    elif tipo == "gerente":
+        base += (
+            "Este usuário é GERENTE: foque na LOJA dele. Não invente outras lojas.\n"
+        )
+    elif tipo == "marketing":
+        base += (
+            "Este usuário é MARKETING: pode falar de leads/campanhas/resultados. "
+            "PROIBIDO discutir código, secrets, infraestrutura ou como o sistema é feito.\n"
+        )
+    elif tipo in {"documentista"}:
+        base += "Foque em documentos, transferências e organização de processos.\n"
+    elif tipo in {"guariba", "mecanico", "mecânico"}:
+        base += "Foque em oficina, status de carros, prioridade de serviços e rotina da oficina.\n"
+    elif tipo == "vendedor":
+        base += (
+            "Este é VENDEDOR: respostas práticas e essenciais (o que fazer hoje). "
+            "Só dados DELE. Sem microgerenciar demais.\n"
+        )
+    else:
+        base += "Responda de forma útil ao perfil dele, só com o contexto dado.\n"
+
+    base += f"\n--- CONTEXTO ---\n{contexto}\n--- FIM ---"
+    return base
+
+
 def _resposta_local_ia(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> str:
-    """Fallback sem API: dicas baseadas nos números do contexto."""
-    p = (pergunta or "").lower()
+    """Fallback sem API: conversa amigável + números do contexto."""
+    p = (pergunta or "").strip().lower()
     nome = usuario.get("nome") or "colega"
+    tipo = str(usuario.get("tipo") or "")
+    nums = _parse_metricas_do_texto(contexto)
 
-    if any(x in p for x in ("quem é você", "quem e voce", "quem voce", "who are you")):
+    # identidade
+    if any(
+        x in p
+        for x in (
+            "quem é você", "quem e voce", "quem voce", "quem eh voce",
+            "who are you", "seu nome",
+        )
+    ):
         return (
-            "Sou **Manu Automóveis Suporte** — assistente interno de ajuda. "
-            "Posso analisar seus números (só do seu acesso) e sugerir próximos passos. "
-            "Não altero dados do sistema."
+            f"Eu sou o **Manu Automóveis Suporte** 🚗 — tipo um colega digital "
+            f"pra te ajudar no dia a dia da loja. Pode perguntar de lead, carro, "
+            f"oficina ou só desabafar um pouco. E aí, {nome}?"
         )
 
-    # extrai números do contexto se possível
-    leads = responderam = fichas = aprovados = vendidos = 0
-    for part in contexto.split(","):
-        part = part.strip()
-        if part.startswith("leads="):
-            try:
-                leads = int(part.split("=")[1])
-            except Exception:
-                pass
-        elif part.startswith("responderam="):
-            try:
-                responderam = int(part.split("=")[1])
-            except Exception:
-                pass
-        elif part.startswith("fichas="):
-            try:
-                fichas = int(part.split("=")[1])
-            except Exception:
-                pass
-        elif part.startswith("aprovados="):
-            try:
-                aprovados = int(part.split("=")[1])
-            except Exception:
-                pass
-        elif part.startswith("vendidos="):
-            try:
-                vendidos = int(part.split("=")[1])
-            except Exception:
-                pass
-
-    taxa_resp = (100 * responderam / leads) if leads else 0
-    taxa_ficha = (100 * fichas / leads) if leads else 0
-    taxa_venda = (100 * vendidos / leads) if leads else 0
-
-    dicas = []
-    if "melhor" in p or "melhorar" in p or "dica" in p or "ajuda" in p or "como" in p:
-        if leads and taxa_resp < 40:
-            dicas.append(
-                f"Sua taxa de resposta está em ~{taxa_resp:.0f}%. "
-                "Priorize os leads **sem resposta** com WhatsApp no mesmo dia "
-                "(mensagem curta + 2 horários de visita)."
-            )
-        if leads and taxa_ficha < 15 and responderam > 0:
-            dicas.append(
-                "Muita gente responde e pouca vira ficha. No atendimento, "
-                "peça CPF e interesse no carro cedo e marque **cliente na loja** "
-                "quando estiver presente — a ficha sobe na fila do crédito."
-            )
-        if fichas and aprovados == 0:
-            dicas.append(
-                "Há fichas sem aprovação ainda. Confirme se documentos e renda "
-                "estão completos; fale com o ElfenAI/crédito sobre pendências."
-            )
-        if aprovados and vendidos == 0:
-            dicas.append(
-                "Você tem aprovados sem compra. Foque em fechar entrada, "
-                "simular parcelas e agendar retorno com proposta pronta."
-            )
-        if not dicas:
-            dicas.append(
-                f"Neste mês: {leads} leads, {responderam} respostas, "
-                f"{fichas} fichas, {aprovados} aprovados, {vendidos} vendas "
-                f"(conv. lead→venda ~{taxa_venda:.1f}%). "
-                "Mantenha follow-up diário nos quentes e registre tudo no sistema."
-            )
+    # saúde / pessoal
+    if any(
+        x in p
+        for x in (
+            "dor de cabeça", "estress", "ansied", "cansad", "triste",
+            "mal", "deprim", "sono", "insonia",
+        )
+    ):
         return (
-            f"Olá, {nome}. Sou **Manu Automóveis Suporte**.\n\n"
-            + "\n\n".join(f"• {d}" for d in dicas)
+            f"Poxa, {nome}, sinto isso. Trabalho de loja puxa mesmo. "
+            "Faz uma pausa curta, água, alonga o pescoço — e se a dor for forte "
+            "ou frequente, vale falar com um médico (eu não substituo isso). "
+            "Se quiser, a gente olha juntos o que está mais pesado na rotina "
+            "de hoje e simplifica uma coisa de cada vez. Quer contar o que mais está te consumindo?"
         )
 
+    # papo leve / besta
+    if any(x in p for x in ("piada", "meme", "fofoca", "futebol", "churrasco")):
+        return (
+            f"Haha, curto um papo leve também, {nome}. "
+            "Só não passo fofoca de cliente nem de colega 😄 "
+            "Se for de carro ou da loja, manda ver. Qual o assunto?"
+        )
+
+    # carros genérico
+    if any(
+        x in p
+        for x in (
+            "motor", "óleo", "oleo", "freio", "suspens", "pneu",
+            "revisão", "revisao", "lataria", "mecanica", "mecânica",
+        )
+    ):
+        extra = ""
+        if "Oficina (amostra" in contexto:
+            extra = "\n\nPelo que vi na oficina recentemente (amostra do sistema):\n" + (
+                [ln for ln in contexto.split("\n") if ln.startswith("Oficina")][0]
+            )
+        return (
+            f"Sobre carro/oficina: o ideal é registrar observação no módulo **Oficina** "
+            f"(onde está, mecânica, lataria, valor) pra todo mundo alinhar."
+            f"{extra}\n\n"
+            "Se for dúvida técnica específica de um carro, me diga placa ou modelo "
+            "que eu te ajudo a organizar o que priorizar."
+        )
+
+    leads = nums["leads"]
+    resp = nums["responderam"]
+    fichas = nums["fichas"]
+    aprov = nums["aprovados"]
+    vend = nums["vendidos"]
+    taxa_r = (100 * resp / leads) if leads else 0
+    taxa_v = (100 * vend / leads) if leads else 0
+
+    # desempenho / melhorar / admin
+    if any(
+        x in p
+        for x in (
+            "melhor", "desempenho", "problema", "administrador",
+            "como estou", "como esta", "prioridade", "priorizar",
+        )
+    ):
+        partes = [f"Olá, {nome} — Manu Automóveis Suporte na área."]
+        if tipo in {"admin", "gerente", "marketing", "documentista"}:
+            partes.append(
+                f"Nos números do seu escopo (mês): **{leads}** leads, "
+                f"**{resp}** responderam, **{fichas}** fichas, "
+                f"**{aprov}** aprovados, **{vend}** vendas "
+                f"(conv. lead→venda ~{taxa_v:.1f}%)."
+            )
+            if leads and taxa_r < 35:
+                partes.append(
+                    "Atenção: taxa de resposta baixa — vale reforçar follow-up no mesmo dia."
+                )
+            if fichas and aprov and vend == 0:
+                partes.append(
+                    "Há crédito aprovado sem compra: priorize fechamento de entrada e retorno com proposta."
+                )
+            if vend == 0 and fichas == 0 and leads > 20:
+                partes.append(
+                    "Muitos leads e pouca ficha: revisar qualificação e oferta no primeiro contato."
+                )
+            if tipo == "admin":
+                partes.append(
+                    "Como admin você enxerga o global: se quiser, pergunte por loja, "
+                    "funil ou o que atacar primeiro esta semana."
+                )
+        else:
+            # essencial para vendedor / oficina
+            partes.append(
+                f"Seu mês: {leads} leads · {resp} respostas · {fichas} fichas · "
+                f"{aprov} aprovados · {vend} vendas."
+            )
+            if leads and taxa_r < 40:
+                partes.append("Foque hoje nos **sem resposta** (WhatsApp curto + horário de visita).")
+            elif aprov and not vend:
+                partes.append("Você tem aprovado parado: ligue com proposta de entrada/parcela.")
+            elif not fichas and resp:
+                partes.append("Transforme resposta em ficha: CPF + carro de interesse cedo.")
+            else:
+                partes.append(
+                    "Mantenha o ritmo: um follow-up a mais por dia já muda a conversão."
+                )
+        partes.append(
+            "_Limitação: só uso dados do seu acesso; não invento o que não está no sistema._"
+        )
+        return "\n\n".join(partes)
+
+    # default acolhedor
     return (
-        f"Sou **Manu Automóveis Suporte**. Vi seu contexto deste mês: "
-        f"{leads} leads, {responderam} responderam, {fichas} fichas, "
-        f"{aprovados} aprovados, {vendidos} vendas.\n\n"
-        "Pergunte por exemplo: *como posso melhorar?*, *o que priorizar hoje?*, "
-        "*como aumentar fichas?*. Não tenho acesso a dados de outros vendedores "
-        "e não altero o sistema — só oriento."
+        f"Sou o **Manu Automóveis Suporte**, {nome}. "
+        f"No seu escopo este mês: {leads} leads, {resp} respostas, "
+        f"{fichas} fichas, {aprov} aprovados, {vend} vendas.\n\n"
+        "Pode perguntar de desempenho, leads, oficina, carros ou só bater um papo. "
+        "Não gero imagens e não mexo no sistema — só ajudo. O que você precisa agora?"
     )
 
 
-def _chamar_xai_chat(mensagens: list, contexto: str) -> Optional[str]:
-    """Chama API xAI (Grok) se api_key estiver nos secrets."""
+def _chamar_xai_chat(
+    mensagens: list,
+    sistema: str,
+) -> Optional[str]:
     import json
     import urllib.request
-    import urllib.error
 
     try:
-        key = st.secrets.get("xai", {}).get("api_key") or st.secrets.get("XAI_API_KEY")
+        xai = st.secrets.get("xai", {})
+        key = xai.get("api_key") if hasattr(xai, "get") else None
+        if not key:
+            key = st.secrets.get("XAI_API_KEY")
+        model = (xai.get("model") if hasattr(xai, "get") else None) or "grok-3"
     except Exception:
         key = None
+        model = "grok-3"
     if not key:
         return None
 
-    system = (
-        "Você é Manu Automóveis Suporte, assistente interno da loja de carros. "
-        "Quando perguntarem quem você é, responda exatamente que é Manu Automóveis Suporte. "
-        "Use APENAS o contexto de dados abaixo (já filtrado ao usuário). "
-        "Nunca invente dados de outros vendedores. "
-        "Nunca diga que pode alterar banco, código ou permissões. "
-        "Seja prático, curto e em português do Brasil.\n\n"
-        f"CONTEXTO DO USUÁRIO:\n{contexto}"
-    )
     payload = {
-        "model": st.secrets.get("xai", {}).get("model", "grok-3"),
-        "messages": [{"role": "system", "content": system}] + mensagens,
-        "temperature": 0.5,
+        "model": model,
+        "messages": [{"role": "system", "content": sistema}] + mensagens,
+        "temperature": 0.7,
     }
     req = urllib.request.Request(
         "https://api.x.ai/v1/chat/completions",
@@ -11210,29 +11380,29 @@ def _chamar_xai_chat(mensagens: list, contexto: str) -> Optional[str]:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=75) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return data["choices"][0]["message"]["content"]
     except Exception as erro:
-        return f"(API indisponível: {erro}. Usando modo local.)"
+        return None  # cai no local; não polui a conversa com erro técnico
 
 
 def pagina_suporte_ia(usuario: Dict[str, Any]) -> None:
     st.title("Manu Automóveis Suporte")
     st.caption(
-        "Assistente de ajuda com base nos **seus** dados. "
-        "Não acessa outros vendedores e não altera o sistema."
+        "Seu colega digital na loja. Dados só do **seu** acesso "
+        "(admin = global · gerente = loja · demais = você). "
+        "Sem alterar sistema · sem gerar imagens."
     )
 
     if "ia_mensagens" not in st.session_state:
         st.session_state["ia_mensagens"] = []
 
-    # Histórico
     for msg in st.session_state["ia_mensagens"]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    pergunta = st.chat_input("Pergunte ao suporte…")
+    pergunta = st.chat_input("Fala com o suporte…")
     if pergunta:
         st.session_state["ia_mensagens"].append(
             {"role": "user", "content": pergunta}
@@ -11241,22 +11411,18 @@ def pagina_suporte_ia(usuario: Dict[str, Any]) -> None:
             st.markdown(pergunta)
 
         with st.chat_message("assistant"):
-            # Indicador sutil de "digitando"
             placeholder = st.empty()
             placeholder.markdown("*Manu está digitando…*")
 
             contexto = _contexto_usuario_para_ia(usuario)
+            sistema = _sistema_prompt_ia(usuario, contexto)
             historico_api = [
                 {"role": m["role"], "content": m["content"]}
-                for m in st.session_state["ia_mensagens"][-12:]
+                for m in st.session_state["ia_mensagens"][-16:]
             ]
-            resposta = _chamar_xai_chat(historico_api, contexto)
-            if not resposta or resposta.startswith("(API indisponível"):
-                local = _resposta_local_ia(pergunta, contexto, usuario)
-                if resposta and resposta.startswith("(API"):
-                    resposta = local + "\n\n" + resposta
-                else:
-                    resposta = local
+            resposta = _chamar_xai_chat(historico_api, sistema)
+            if not resposta:
+                resposta = _resposta_local_ia(pergunta, contexto, usuario)
 
             placeholder.markdown(resposta)
 
@@ -11264,10 +11430,11 @@ def pagina_suporte_ia(usuario: Dict[str, Any]) -> None:
             {"role": "assistant", "content": resposta}
         )
 
-    if st.button("Limpar conversa", key="ia_limpar"):
-        st.session_state["ia_mensagens"] = []
-        st.rerun()
-
+    cols = st.columns([1, 4])
+    with cols[0]:
+        if st.button("Limpar conversa", key="ia_limpar"):
+            st.session_state["ia_mensagens"] = []
+            st.rerun()
 
 # ============================================================
 # EXECUÇÃO PRINCIPAL
