@@ -10268,7 +10268,7 @@ def html_autorizacao_faturamento(dados: dict) -> str:
       BANCO: {v('fin_banco')} &nbsp;
       QUANT. DE PARCELAS: {v('fin_parcelas')} &nbsp;
       VALOR DA PARCELA R$: {money('fin_valor_parcela')}
-      &nbsp;|&nbsp; VALOR FINANCIADO/LIBERADO R$: {money('valor_liberado')}
+      &nbsp;|&nbsp;
     </td>
   </tr>
 </table>
@@ -10306,7 +10306,7 @@ def html_autorizacao_faturamento(dados: dict) -> str:
             NESTE ATO TOMO CIÊNCIA DO TEOR DO REFERIDO TERMO, QUE ME FOI LIDO E EXPLICADO DE FORMA CLARA E OBJETIVA, CONCORDANDO COM
             TUDO, E AINDA DECLARO QUE ME FOI ENTREGUE UMA CÓPIA DO REFERIDO TERMO.
 </p>
-<p><b>Rio de Janeiro,</b> ____ / ____ / ________ &nbsp; <i>(a caneta)</i></p>
+<p><b>Rio de Janeiro,</b> ____ / ____ / ________ &nbsp; </p>
 <table class="assinaturas">
   <tr>
     <td>_________________________<br/>VENDEDOR<br/>{v('vendedor_nome')}</td>
