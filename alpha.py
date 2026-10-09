@@ -21,63 +21,116 @@ CADASTRO_ABERTO = True
 
 from datetime import datetime, timedelta
 
-def salvar_sessao(usuario: dict, dias: int = 30):
-    """Salva o usuário logado no cookie"""
-    # Garante que todos os valores sejam serializáveis
-    dados = {
+# Duração do cookie quando "Lembrar-me" está marcado (dias).
+SESSAO_DIAS_LEMBRAR = 14
+# Sem "Lembrar-me": sessão curta (horas) — evita ficar preso logado.
+SESSAO_HORAS_SEM_LEMBRAR = 12
+
+CHAVES_SESSAO = [
+    "usuario_logado",
+    "filtro_categoria",
+    "pagina_atual",
+    "chat_vendedor_selecionado",
+    "abrir_formulario",
+    "filtro_vendedor_id",
+    "busca_lead_campo",
+    "busca_lead_aplicada",
+    "busca_estoque_campo",
+    "busca_estoque_aplicada",
+    "busca_ficha_campo",
+    "busca_ficha_aplicada",
+    "fichas_limite",
+    "fichas_filtro_chave",
+    "ficha_detalhe_id",
+    "transferencia_aberta_id",
+    "busca_oficina_campo",
+    "busca_oficina_aplicada",
+    "logout_pendente",
+]
+
+
+def _dados_cookie_usuario(usuario: dict) -> dict:
+    return {
         "id": int(usuario["id"]) if usuario.get("id") is not None else None,
         "nome": str(usuario.get("nome") or ""),
         "login": str(usuario.get("login") or ""),
         "tipo": str(usuario.get("tipo") or ""),
         "tipo_original": str(usuario.get("tipo_original") or ""),
-        "vendedor_id": int(usuario["vendedor_id"]) if usuario.get("vendedor_id") is not None else None,
+        "vendedor_id": (
+            int(usuario["vendedor_id"])
+            if usuario.get("vendedor_id") is not None
+            else None
+        ),
         "loja": str(usuario.get("loja") or "381"),
         "is_admin": bool(usuario.get("is_admin", False)),
     }
 
-    cookie_manager.set(
-        "usuario_logado",
-        dados,
-        expires_at=datetime.now() + timedelta(days=dias)   # ← datetime, não float
-    )
+
+def salvar_sessao(usuario: dict, lembrar: bool = False):
+    """
+    Persiste login em cookie.
+    lembrar=True  → até SESSAO_DIAS_LEMBRAR dias
+    lembrar=False → poucas horas (fecha o browser e some em breve)
+    """
+    dados = _dados_cookie_usuario(usuario)
+    if lembrar:
+        expira = datetime.now() + timedelta(days=SESSAO_DIAS_LEMBRAR)
+    else:
+        expira = datetime.now() + timedelta(hours=SESSAO_HORAS_SEM_LEMBRAR)
+    try:
+        cookie_manager.set("usuario_logado", dados, expires_at=expira)
+    except Exception:
+        pass
+
 
 def carregar_sessao():
-    """Tenta carregar o usuário do cookie"""
+    """
+    Lê o cookie. IMPORTANTE: chamar em todo rerun para o CookieManager
+    montar o componente (senão delete/set não aplicam).
+    """
     try:
-        return cookie_manager.get("usuario_logado")
+        valor = cookie_manager.get("usuario_logado")
+        if not valor or not isinstance(valor, dict):
+            return None
+        if not valor.get("id"):
+            return None
+        return valor
     except Exception:
         return None
 
+
 def limpar_sessao():
+    """
+    Logout de verdade:
+    1) marca logout_pendente (impede recarregar cookie no próximo run)
+    2) apaga cookie (delete + set vazio expirado)
+    3) zera session_state
+    4) rerun → tela de login
+    """
+    st.session_state["logout_pendente"] = True
+    st.session_state["usuario_logado"] = None
+
     try:
         cookie_manager.delete("usuario_logado")
     except Exception:
         pass
+    try:
+        # Garante expiração imediata (alguns browsers ignoram só o delete)
+        cookie_manager.set(
+            "usuario_logado",
+            {},
+            expires_at=datetime(1970, 1, 1),
+        )
+    except Exception:
+        pass
 
-    chaves_para_limpar = [
-        "usuario_logado",
-        "filtro_categoria",
-        "pagina_atual",
-        "chat_vendedor_selecionado",
-        "abrir_formulario",
-        "filtro_vendedor_id",
-        "busca_lead_campo",
-        "busca_lead_aplicada",
-        "busca_estoque_campo",
-        "busca_estoque_aplicada",
-        "busca_ficha_campo",
-        "busca_ficha_aplicada",
-        "fichas_limite",
-        "fichas_filtro_chave",
-        "ficha_detalhe_id",
-        "transferencia_aberta_id",
-        "busca_oficina_campo",
-        "busca_oficina_aplicada",
-    ]
-
-    for chave in chaves_para_limpar:
+    for chave in CHAVES_SESSAO:
+        if chave == "logout_pendente":
+            continue
         st.session_state.pop(chave, None)
 
+    st.session_state["usuario_logado"] = None
+    st.session_state["logout_pendente"] = True
     st.rerun()
 # ============================================================
 # CONFIGURAÇÃO
@@ -815,7 +868,7 @@ def cadastrar_usuario_supabase(
     return True, "Conta criada. Faça login."
 
 
-def autenticar_via_supabase_email(email: str, senha: str) -> bool:
+def autenticar_via_supabase_email(email: str, senha: str, lembrar: bool = False) -> bool:
     """Login pelo Auth; carrega tipo/loja de public.usuarios."""
     ok, data = supabase_auth_request(
         "token?grant_type=password",
@@ -858,13 +911,13 @@ def autenticar_via_supabase_email(email: str, senha: str) -> bool:
             "is_admin": tipo in {"admin", "gerente"},
             "auth_user_id": auth_uid,
         }
-        salvar_sessao(st.session_state["usuario_logado"])
+        salvar_sessao(st.session_state["usuario_logado"], lembrar=lembrar)
         return True
     except Exception:
         return False
 
 
-def autenticar(login_input: str, senha_input: str) -> bool:
+def autenticar(login_input: str, senha_input: str, lembrar: bool = False) -> bool:
     try:
         try:
             query = text(
@@ -955,7 +1008,7 @@ def autenticar(login_input: str, senha_input: str) -> bool:
             "is_admin": tipo in {"admin", "gerente"},
         }
 
-        salvar_sessao(st.session_state["usuario_logado"])
+        salvar_sessao(st.session_state["usuario_logado"], lembrar=lembrar)
 
         return True
 
@@ -964,41 +1017,11 @@ def autenticar(login_input: str, senha_input: str) -> bool:
         return False
 
 
-def limpar_sessao():
-    # Limpa o cookie
-    try:
-        cookie_manager.delete("usuario_logado")
-    except Exception:
-        pass
-
-    chaves_para_limpar = [
-        "usuario_logado",
-        "filtro_categoria",
-        "pagina_atual",
-        "chat_vendedor_selecionado",
-        "abrir_formulario",
-        "filtro_vendedor_id",
-        "busca_lead_campo",
-        "busca_lead_aplicada",
-        "busca_estoque_campo",
-        "busca_estoque_aplicada",
-        "busca_ficha_campo",
-        "busca_ficha_aplicada",
-        "fichas_limite",
-        "fichas_filtro_chave",
-        "ficha_detalhe_id",
-        "transferencia_aberta_id",
-        "busca_oficina_campo",
-        "busca_oficina_aplicada",
-    ]
-
-    for chave in chaves_para_limpar:
-        st.session_state.pop(chave, None)
-
-    st.rerun()
-
-
 def inicializar_sessao():
+    """
+    Inicializa session_state e, se não estiver em logout,
+    tenta restaurar o usuário do cookie.
+    """
     defaults = {
         "usuario_logado": None,
         "filtro_categoria": "todos",
@@ -1015,16 +1038,26 @@ def inicializar_sessao():
         "fichas_filtro_chave": None,
         "busca_ficha_aplicada": "",
         "busca_oficina_aplicada": "",
+        "logout_pendente": False,
     }
 
     for chave, valor in defaults.items():
         if chave not in st.session_state:
             st.session_state[chave] = valor
 
-    if st.session_state.get("usuario_logado") is None:
-            usuario_cookie = carregar_sessao()
-            if usuario_cookie:
-                st.session_state["usuario_logado"] = usuario_cookie
+    # Sempre consulta o cookie (monta o componente CookieManager)
+    usuario_cookie = carregar_sessao()
+
+    # Logout em andamento: NÃO restaura cookie
+    if st.session_state.get("logout_pendente"):
+        st.session_state["usuario_logado"] = None
+        # Quando o cookie já sumiu, libera a flag
+        if not usuario_cookie:
+            st.session_state["logout_pendente"] = False
+        return
+
+    if st.session_state.get("usuario_logado") is None and usuario_cookie:
+        st.session_state["usuario_logado"] = usuario_cookie
 
 
 inicializar_sessao()
@@ -4109,6 +4142,11 @@ def mostrar_login() -> None:
                 with st.form("form_login"):
                     login = st.text_input("Usuário ou e-mail")
                     senha = st.text_input("Senha", type="password")
+                    lembrar = st.checkbox(
+                        "Lembrar-me neste dispositivo",
+                        value=False,
+                        help="Sem marcar: sessão curta (~12h). Marcado: até 14 dias.",
+                    )
                     entrar = st.form_submit_button(
                         "Entrar",
                         use_container_width=True,
@@ -4116,10 +4154,13 @@ def mostrar_login() -> None:
                     )
 
                 if entrar:
-                    ok = autenticar(login, senha)
+                    ok = autenticar(login, senha, lembrar=lembrar)
                     if not ok and "@" in (login or ""):
-                        ok = autenticar_via_supabase_email(login, senha)
+                        ok = autenticar_via_supabase_email(
+                            login, senha, lembrar=lembrar
+                        )
                     if ok:
+                        st.session_state["logout_pendente"] = False
                         st.success("Login realizado com sucesso.")
                         st.rerun()
                     else:
@@ -4170,7 +4211,7 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
             f"Loja: {normalizar_loja(usuario.get('loja', '381'))}"
         )
 
-        if st.button("Sair", use_container_width=True):
+        if st.button("Sair", use_container_width=True, key="btn_sair_app"):
             limpar_sessao()
 
         st.markdown("---")
