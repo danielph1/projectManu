@@ -274,8 +274,8 @@ ROLE_ALIASES = {
     "proprietario": "admin",
     "proprietário": "admin",
     "owner": "admin",
-    # marketing = admin por enquanto (futuro: perfil próprio)
-    "marketing": "admin",
+    # marketing = perfil próprio (global, sem métricas financeiras)
+    "marketing": "marketing",
     # Poder por loja
     "gerente": "gerente",
     # Demais perfis
@@ -367,6 +367,24 @@ PERMISSIONS: Dict[str, Set[str]] = {
     "gerente": {
         "*",
     },
+    # marketing = global (todas lojas), sem métricas $ de crédito
+    "marketing": {
+        "view_leads",
+        "view_stock",
+        "view_transferencias",
+        "create_lead",
+        "edit_own_lead",
+        "use_chat",
+        "view_tasks",
+        "manage_tasks",
+        "respond_tasks",
+        "view_goals",
+        "view_credit_fichas",
+        "view_pending_clients",  # clientes com boleto/pendência
+        "view_oficina",
+        "view_faturamento",
+        "transfer_leads",
+    },
     "elfen_ai": {
         "view_leads",
         "view_stock",
@@ -455,13 +473,28 @@ def usuario_e_gerente() -> bool:
 
 
 def usuario_e_admin() -> bool:
-    """Admin / marketing / dono — poder global em todas as lojas."""
+    """Admin (dono) — poder global total."""
     return st.session_state.get("usuario_logado", {}).get("tipo") == "admin"
 
 
+def usuario_e_marketing() -> bool:
+    return st.session_state.get("usuario_logado", {}).get("tipo") == "marketing"
+
+
 def usuario_e_gestor() -> bool:
-    """Admin ou gerente (qualquer um que gerencia operação)."""
+    """Admin ou gerente — métricas e gestão operacional completa."""
     return usuario_e_admin() or usuario_e_gerente()
+
+
+def usuario_pode_gerir_tarefas() -> bool:
+    """Admin, gerente ou marketing criam/editam/excluem tarefas."""
+    t = st.session_state.get("usuario_logado", {}).get("tipo")
+    return t in {"admin", "gerente", "marketing"} or usuario_tem("manage_tasks")
+
+
+def usuario_pode_transferir_leads() -> bool:
+    t = st.session_state.get("usuario_logado", {}).get("tipo")
+    return t in {"admin", "gerente", "marketing"} or usuario_tem("transfer_leads")
 
 
 def loja_do_usuario() -> str:
@@ -1087,8 +1120,8 @@ def escopo_leads(usuario: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
             "scope_vendedor_id": usuario["vendedor_id"],
         }
 
-    # admin / marketing: vê tudo
-    if tipo == "admin":
+    # admin e marketing: veem leads de TODAS as lojas
+    if tipo in {"admin", "marketing"}:
         return "TRUE", {}
 
     # gerente: só leads de vendedores da mesma loja
@@ -1606,7 +1639,8 @@ def marcar_tarefas_como_visualizadas(usuario_id: int) -> None:
 
 
 def obter_tarefas(usuario: Dict[str, Any]) -> pd.DataFrame:
-    if usuario["tipo"] == "gerente":
+    # Admin / gerente / marketing veem todas; demais só as próprias
+    if usuario["tipo"] in {"admin", "gerente", "marketing"}:
         filtro = "TRUE"
         parametros = {}
     else:
@@ -4225,8 +4259,9 @@ def mostrar_login() -> None:
                     )
                     tipos_cadastro = [
                         t for t in (
-                            "vendedor", "gerente", "elfen_ai", "financeiro",
-                            "documentista", "guariba", "mecanico", "admin",
+                            "vendedor", "gerente", "marketing", "elfen_ai",
+                            "financeiro", "documentista", "guariba",
+                            "mecanico", "admin",
                         )
                         if t in PERMISSIONS
                     ]
@@ -6044,9 +6079,9 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
 
 
     # ------------------------------------------------------------------
-    # Transferência em massa de leads (somente gerente/admin)
+    # Transferência em massa: admin, gerente e marketing
     # ------------------------------------------------------------------
-    if usuario_e_gestor():
+    if usuario_pode_transferir_leads():
         with st.expander("🔀 Transferir leads entre vendedores", expanded=False):
             df_vend = obter_vendedores()
             if df_vend.empty:
@@ -6064,12 +6099,16 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
                     "Destino",
                     ["vendedor_especifico", "aleatorio", "aleatorio_loja"],
                     format_func=lambda v: {
-                        "vendedor_especifico": "Vendedor específico",
-                        "aleatorio": "Aleatório (qualquer vendedor ativo)",
-                        "aleatorio_loja": "Aleatório em uma loja",
+                        "vendedor_especifico": "Vendedor específico (todos os leads → 1 pessoa)",
+                        "aleatorio": "Dividir aleatoriamente entre todos os vendedores",
+                        "aleatorio_loja": "Dividir aleatoriamente entre vendedores de uma loja",
                     }[v],
                     horizontal=True,
                     key="transf_massa_modo",
+                )
+                st.caption(
+                    "Nos modos aleatórios, **cada lead** vai para um vendedor "
+                    "sorteado (os leads são repartidos, não todos para um só)."
                 )
                 destino_id = None
                 loja_destino = None
@@ -6242,7 +6281,12 @@ def pagina_leads(usuario: Dict[str, Any]) -> None:
                                             },
                                         )
                                     movidos += 1
-                                st.success(f"{movidos} lead(s) transferidos.")
+                                st.success(
+                                    f"{movidos} lead(s) transferidos por "
+                                    f"**{usuario.get('nome')}** "
+                                    f"(de origem #{origem}). "
+                                    "Cada transferência ficou registrada no histórico."
+                                )
                                 st.cache_data.clear()
                                 st.rerun()
                     except Exception as erro:
@@ -6679,7 +6723,8 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
     st.session_state["fichas_data_inicio"] = data_inicio_f
     st.session_state["fichas_data_fim"] = data_fim_f
 
-    # Métricas financeiras: somente admin e gerente.
+    # Métricas $ completas: admin e gerente.
+    # Marketing: só lista de clientes pendentes (sem totais/bancos).
     if usuario_e_gestor():
         try:
             por_banco, geral = obter_metricas_credito(
@@ -6753,16 +6798,19 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                         f"Mostrando fichas do banco: {banco_selecionado}"
                     )
 
+                # Sem "fichas distintas" nem "pendentes" por banco
+                # (pendentes globais já estão no topo das métricas)
+                df_bancos = por_banco[
+                    [c for c in (
+                        "banco", "total_aprovados", "total_negados", "taxa_aprovacao"
+                    ) if c in por_banco.columns]
+                ].rename(columns={
+                    "total_aprovados": "aprovadas",
+                    "total_negados": "negadas",
+                    "taxa_aprovacao": "taxa (%)",
+                })
                 st.dataframe(
-                    por_banco.rename(
-                        columns={
-                            "fichas_analisadas": "fichas distintas",
-                            "total_aprovados": "aprovadas",
-                            "total_negados": "negadas",
-                            "total_pendentes": "pendentes",
-                            "taxa_aprovacao": "taxa (%)",
-                        }
-                    ),
+                    df_bancos,
                     use_container_width=True,
                     hide_index=True,
                 )
@@ -6854,6 +6902,30 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                 f"Detalhe: {erro}"
             )
 
+        st.markdown("---")
+
+    elif usuario_e_marketing() or usuario_tem("view_pending_clients"):
+        # Marketing: vê clientes pendentes, sem totais financeiros / bancos
+        st.subheader("Clientes com valor pendente")
+        try:
+            pendentes = obter_fichas_com_valor_pendente()
+            if pendentes.empty:
+                st.info("Nenhum cliente com valor pendente.")
+            else:
+                st.dataframe(
+                    pendentes.assign(
+                        data_nascimento=pendentes["data_nascimento"].map(
+                            formatar_data_br
+                        ),
+                        data_compra=pendentes["data_compra"].map(
+                            formatar_data_br
+                        ),
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+        except Exception as erro:
+            st.warning(f"Não foi possível carregar pendências: {erro}")
         st.markdown("---")
 
     status_opcoes = [
@@ -8307,7 +8379,7 @@ def pagina_tarefas(usuario: Dict[str, Any]) -> None:
         # Abrir a aba representa a visualização das tarefas.
         marcar_tarefas_como_visualizadas(usuario["id"])
 
-    if usuario["tipo"] == "gerente":
+    if usuario_pode_gerir_tarefas():
         usuarios = obter_usuarios_ativos()
         ids_usuarios = usuarios["id"].tolist()
 
@@ -8315,14 +8387,37 @@ def pagina_tarefas(usuario: Dict[str, Any]) -> None:
             with st.form("form_criar_tarefa"):
                 titulo = st.text_input("Título da tarefa*")
                 descricao = st.text_area("Descrição / instruções")
-
-                destinatario_id = st.selectbox(
-                    "Atribuir para*",
-                    options=ids_usuarios,
-                    format_func=lambda valor: usuarios.loc[
-                        usuarios["id"] == valor, "nome"
-                    ].iloc[0],
+                modo_alvo = st.radio(
+                    "Atribuir para",
+                    ["pessoa", "tipo", "loja"],
+                    horizontal=True,
+                    format_func=lambda m: {
+                        "pessoa": "Pessoa específica",
+                        "tipo": "Perfil / tipo (ex.: todos vendedores)",
+                        "loja": "Todos de uma loja",
+                    }[m],
                 )
+                destinatario_id = None
+                tipo_alvo = None
+                loja_alvo = None
+                if modo_alvo == "pessoa":
+                    destinatario_id = st.selectbox(
+                        "Pessoa*",
+                        options=ids_usuarios,
+                        format_func=lambda valor: usuarios.loc[
+                            usuarios["id"] == valor, "nome"
+                        ].iloc[0],
+                    )
+                elif modo_alvo == "tipo":
+                    tipos_opt = sorted(
+                        set(usuarios["tipo"].dropna().astype(str).tolist())
+                        | set(PERMISSIONS.keys())
+                    )
+                    tipo_alvo = st.selectbox("Tipo / perfil*", tipos_opt)
+                else:
+                    loja_alvo = st.selectbox(
+                        "Loja*", list(LOJAS_DISPONIVEIS)
+                    )
 
                 criar = st.form_submit_button(
                     "Criar tarefa",
@@ -8334,40 +8429,73 @@ def pagina_tarefas(usuario: Dict[str, Any]) -> None:
                 if not titulo.strip():
                     st.warning("Informe um título para a tarefa.")
                 else:
-                    try:
-                        with engine.begin() as conn:
-                            conn.execute(
-                                text(
-                                    """
-                                    INSERT INTO public.tarefas (
-                                        titulo,
-                                        descricao,
-                                        destinatario_id,
-                                        criado_por_id
+                    # Resolve lista de destinatários
+                    dests = []
+                    if modo_alvo == "pessoa" and destinatario_id:
+                        dests = [int(destinatario_id)]
+                    elif modo_alvo == "tipo" and tipo_alvo:
+                        dests = usuarios[
+                            usuarios["tipo"].astype(str).str.lower()
+                            == str(tipo_alvo).lower()
+                        ]["id"].astype(int).tolist()
+                    elif modo_alvo == "loja" and loja_alvo:
+                        if "loja" in usuarios.columns:
+                            dests = usuarios[
+                                usuarios["loja"].astype(str).str.upper()
+                                == str(loja_alvo).upper()
+                            ]["id"].astype(int).tolist()
+                        else:
+                            dests = []
+                    if not dests:
+                        st.warning("Nenhum destinatário encontrado para o alvo.")
+                    else:
+                        try:
+                            with engine.begin() as conn:
+                                for did in dests:
+                                    conn.execute(
+                                        text(
+                                            """
+                                            INSERT INTO public.tarefas (
+                                                titulo,
+                                                descricao,
+                                                destinatario_id,
+                                                criado_por_id,
+                                                alvo_tipo,
+                                                alvo_loja
+                                            )
+                                            VALUES (
+                                                :titulo,
+                                                :descricao,
+                                                :destinatario_id,
+                                                :criado_por_id,
+                                                :alvo_tipo,
+                                                :alvo_loja
+                                            )
+                                            """
+                                        ),
+                                        {
+                                            "titulo": titulo.strip(),
+                                            "descricao": (
+                                                descricao.strip()
+                                                if descricao.strip()
+                                                else None
+                                            ),
+                                            "destinatario_id": did,
+                                            "criado_por_id": usuario["id"],
+                                            "alvo_tipo": tipo_alvo,
+                                            "alvo_loja": loja_alvo,
+                                        },
                                     )
-                                    VALUES (
-                                        :titulo,
-                                        :descricao,
-                                        :destinatario_id,
-                                        :criado_por_id
-                                    )
-                                    """
-                                ),
-                                {
-                                    "titulo": titulo.strip(),
-                                    "descricao": (
-                                        descricao.strip()
-                                        if descricao.strip()
-                                        else None
-                                    ),
-                                    "destinatario_id": destinatario_id,
-                                    "criado_por_id": usuario["id"],
-                                },
+                            st.success(
+                                f"Tarefa criada para {len(dests)} destinatário(s). "
+                                f"(por: {usuario.get('nome')})"
                             )
-                        st.success("Tarefa criada e atribuída.")
-                        st.rerun()
-                    except Exception as erro:
-                        st.error(f"Erro ao criar tarefa: {erro}")
+                            st.rerun()
+                        except Exception as erro:
+                            st.error(
+                                f"Erro ao criar tarefa: {erro}. "
+                                "Rode o schema (colunas alvo_tipo/alvo_loja)."
+                            )
 
     try:
         tarefas = obter_tarefas(usuario)
@@ -8387,7 +8515,7 @@ def pagina_tarefas(usuario: Dict[str, Any]) -> None:
 
     usuarios = (
         obter_usuarios_ativos()
-        if usuario["tipo"] == "gerente"
+        if usuario_pode_gerir_tarefas()
         else pd.DataFrame()
     )
 
@@ -8487,8 +8615,8 @@ def pagina_tarefas(usuario: Dict[str, Any]) -> None:
                     except Exception as erro:
                         st.error(f"Erro ao responder tarefa: {erro}")
 
-            # Somente gerente altera a tarefa, inclusive o destinatário.
-            if usuario["tipo"] == "gerente":
+            # Admin / gerente / marketing administram a tarefa.
+            if usuario_pode_gerir_tarefas():
                 st.markdown("---")
                 st.markdown("**Administração da tarefa**")
 
