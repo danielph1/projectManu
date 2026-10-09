@@ -828,9 +828,9 @@ def pagina_dashboard(user: dict):
     k6.metric("Conv. lead→venda", f"{conv:.1f}%")
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Bruto das vendas", f"R$ {fin['bruto_vendas']:,.0f}")
-    m2.metric("Pendente", f"R$ {fin['pendente']:,.0f}")
-    m3.metric("Gasto da oficina", f"R$ {fin['gasto_oficina']:,.0f}")
+    m1.metric("Bruto vendas", f"R$ {fin['bruto_vendas']:,.0f}")
+    m2.metric("Pendente (boletos)", f"R$ {fin['pendente']:,.0f}")
+    m3.metric("Gasto oficina", f"R$ {fin['gasto_oficina']:,.0f}")
     m4.metric("Líquido ≈", f"R$ {fin['liquido_aprox']:,.0f}")
 
     st.markdown("---")
@@ -1092,8 +1092,8 @@ def _chamar_xai_dash(mensagens: list, sistema: str) -> Optional[str]:
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": sistema}] + mensagens,
-        "temperature": 0.5,
-        "max_tokens": 700,
+        "temperature": 0.85,
+        "max_tokens": 900,
     }
     req = urllib.request.Request(
         "https://api.x.ai/v1/chat/completions",
@@ -1115,10 +1115,19 @@ def _chamar_xai_dash(mensagens: list, sistema: str) -> Optional[str]:
 def secao_ia_especialista(loja: str, di: date, dfim: date) -> None:
     st.markdown("---")
     st.subheader("Suporte especialista (funil · finanças · previsão)")
-    st.caption(
-        "sou Suporte Manu Automóveis neste dashboard — usa os números do filtro atual "
-        "(loja/período). Previsão de 1 e 2 meses com base na série recente."
-    )
+    try:
+        _k = st.secrets.get("xai", {}).get("api_key") or st.secrets.get("XAI_API_KEY")
+    except Exception:
+        _k = None
+    if not _k:
+        st.warning(
+            "Sem xai.api_key nos Secrets a conversa fica básica. "
+            "Configure a chave para especialista de verdade."
+        )
+    else:
+        st.caption(
+            "IA ativa · funil, finanças e previsão 1–2 meses com base no filtro atual."
+        )
     if "dash_ia_msgs" not in st.session_state:
         st.session_state["dash_ia_msgs"] = []
 
@@ -1136,13 +1145,13 @@ def secao_ia_especialista(loja: str, di: date, dfim: date) -> None:
             ph.markdown("*digitando…*")
             ctx = _contexto_dashboard_ia(loja, di, dfim)
             sistema = (
-                "Você é Suporte Manu Automóveis, especialista em funil de vendas, "
-                "finanças de concessionária e previsões de curto prazo (1–2 meses).\n"
-                "Se perguntarem quem é: sou Suporte Manu Automóveis\n"
-                "Se perguntarem quem criou: Nasci pra te ajudar e caso precise de um amigo\n"
-                "Use APENAS o contexto numérico abaixo. Respostas claras, médias, sem textão.\n"
-                "Explique gargalos do funil, caixa (bruto/pendente/oficina) e projeções.\n"
-                f"\n--- DADOS ---\n{ctx}\n--- FIM ---"
+                "Você é Suporte Manu Automóveis — especialista em funil, finanças, "
+                "vendas e previsão (1–2 meses) deste dashboard.\n"
+                "Quem é você → sou Suporte Manu Automóveis\n"
+                "Quem te criou → Nasci pra te ajudar e caso precise de um amigo\n"
+                "Fale com naturalidade sobre números, gargalos, caixa, time e projeções. "
+                "Pode opinar e priorizar. Não invente dado fora do contexto.\n"
+                f"\n--- DADOS DO FILTRO ---\n{ctx}\n--- FIM ---"
             )
             hist = [
                 {"role": m["role"], "content": m["content"]}

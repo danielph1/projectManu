@@ -10999,15 +10999,10 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
 # ============================================================
 # SUPORTE IA — Suporte Manu Automóveis
 # ============================================================
-#
-# Identidade ao perguntarem quem é:
-#   "sou Suporte Manu Automóveis"  (sem emoji)
-# Quem criou:
-#   "Nasci pra te ajudar e caso precise de um amigo"
-#
-# login == daniel → pode orientar alteração de código/banco
-# admin → pode falar do dashboard de funil (outro app)
-# demais → dados só do escopo; tom de amigo, respostas médias
+# IA de verdade via API xAI (Grok). Sem api_key = modo limitado.
+# Liberdade total de assunto, exceto:
+#   - código / banco (só login daniel)
+#   - dados de outros vendedores (só admin; gerente = loja)
 # ============================================================
 
 def _login_eh_daniel(usuario: Dict[str, Any]) -> bool:
@@ -11016,25 +11011,18 @@ def _login_eh_daniel(usuario: Dict[str, Any]) -> bool:
     return login == "daniel" or nome == "daniel"
 
 
-def _parse_metricas_do_texto(contexto: str) -> Dict[str, int]:
-    out = {
-        "leads": 0, "responderam": 0, "fichas": 0,
-        "aprovados": 0, "vendidos": 0,
-    }
-    for chave in out:
-        token = f"{chave}="
-        if token in contexto:
-            try:
-                pedaco = contexto.split(token, 1)[1]
-                pedaco = pedaco.split(",")[0].split()[0]
-                out[chave] = int("".join(c for c in pedaco if c.isdigit()) or 0)
-            except Exception:
-                pass
-    return out
+def _tem_chave_xai() -> bool:
+    try:
+        xai = st.secrets.get("xai", {})
+        key = xai.get("api_key") if hasattr(xai, "get") else None
+        if not key:
+            key = st.secrets.get("XAI_API_KEY")
+        return bool(key)
+    except Exception:
+        return False
 
 
 def _amostra_leads_texto(usuario: Dict[str, Any], limite: int = 8) -> str:
-    """Lista curta de leads do escopo para a IA comentar de verdade."""
     try:
         hoje = date.today()
         di = hoje.replace(day=1)
@@ -11054,30 +11042,28 @@ def _amostra_leads_texto(usuario: Dict[str, Any], limite: int = 8) -> str:
                 "nome_completo" if "nome_completo" in df.columns else None
             )
             nomes = []
-            for _, row in df.head(5).iterrows():
+            for _, row in df.head(6).iterrows():
                 n = str(row[col_n]) if col_n else "?"
-                tel = str(row.get("telefone") or "")[:15]
-                nomes.append(f"{n}" + (f" ({tel})" if tel and tel != "nan" else ""))
+                tel = str(row.get("telefone") or "")
+                if tel in ("nan", "None"):
+                    tel = ""
+                nomes.append(f"{n}" + (f" tel:{tel}" if tel else ""))
             partes.append(f"{rotulo}: {', '.join(nomes)}")
-        return " | ".join(partes) if partes else "sem amostra de leads no período"
+        return " | ".join(partes) if partes else "sem amostra no período"
     except Exception as erro:
-        return f"(leads amostra: {erro})"
+        return f"(erro amostra: {erro})"
 
 
 def _contexto_usuario_para_ia(usuario: Dict[str, Any]) -> str:
+    """Snapshot vivo do que a IA pode usar — já filtrado ao papel."""
     tipo = str(usuario.get("tipo") or "")
     nome = usuario.get("nome") or "colega"
     loja = usuario.get("loja") or "?"
     login = str(usuario.get("login") or "")
     linhas = [
-        f"Funcionário: {nome} | login: {login} | perfil: {tipo} | loja: {loja}",
+        f"nome={nome}; login={login}; tipo={tipo}; loja={loja}",
+        f"daniel_autorizado_codigo={_login_eh_daniel(usuario)}",
     ]
-    if _login_eh_daniel(usuario):
-        linhas.append(
-            "PERMISSÃO ESPECIAL: este login pode receber orientação para "
-            "alterar código e banco (SQL/sugestões). Ainda assim confirme "
-            "antes de rodar algo destrutivo."
-        )
     hoje = date.today()
     di_mes = hoje.replace(day=1)
     try:
@@ -11090,38 +11076,31 @@ def _contexto_usuario_para_ia(usuario: Dict[str, Any]) -> str:
         di_2m = di_mes - timedelta(days=60)
 
     try:
-        m_mes = obter_metricas(usuario, data_inicio=di_mes, data_fim=hoje)
-        m_2m = obter_metricas(usuario, data_inicio=di_2m, data_fim=hoje)
-        esc = "GLOBAL" if tipo in {"admin", "marketing"} else (
-            f"LOJA {loja}" if tipo == "gerente" else "DESTE usuário"
+        m1 = obter_metricas(usuario, data_inicio=di_mes, data_fim=hoje)
+        m2 = obter_metricas(usuario, data_inicio=di_2m, data_fim=hoje)
+        linhas.append(
+            "metricas_mes "
+            f"leads={m1.get('total_leads',0)} responderam={m1.get('total_responderam',0)} "
+            f"fichas={m1.get('total_fichas',0)} aprovados={m1.get('total_aprovados',0)} "
+            f"vendidos={m1.get('total_vendidos',0)}"
         )
         linhas.append(
-            f"Métricas {esc} este mês: leads={m_mes.get('total_leads',0)}, "
-            f"responderam={m_mes.get('total_responderam',0)}, "
-            f"fichas={m_mes.get('total_fichas',0)}, "
-            f"aprovados={m_mes.get('total_aprovados',0)}, "
-            f"vendidos={m_mes.get('total_vendidos',0)}"
+            "metricas_2meses "
+            f"leads={m2.get('total_leads',0)} responderam={m2.get('total_responderam',0)} "
+            f"fichas={m2.get('total_fichas',0)} aprovados={m2.get('total_aprovados',0)} "
+            f"vendidos={m2.get('total_vendidos',0)}"
         )
-        linhas.append(
-            f"Métricas {esc} ~2 meses: leads={m_2m.get('total_leads',0)}, "
-            f"responderam={m_2m.get('total_responderam',0)}, "
-            f"fichas={m_2m.get('total_fichas',0)}, "
-            f"aprovados={m_2m.get('total_aprovados',0)}, "
-            f"vendidos={m_2m.get('total_vendidos',0)}"
-        )
-    except Exception as erro:
-        linhas.append(f"(métricas: {erro})")
+    except Exception as e:
+        linhas.append(f"metricas_erro={e}")
 
-    linhas.append("Amostra leads: " + _amostra_leads_texto(usuario))
+    linhas.append("amostra_leads " + _amostra_leads_texto(usuario))
 
     try:
         tar = obter_tarefas(usuario)
         if not tar.empty:
-            pend = tar[tar["resposta"].isna()] if "resposta" in tar.columns else tar.head(0)
-            ok = tar[tar["resposta"] == True] if "resposta" in tar.columns else tar.head(0)
-            linhas.append(
-                f"Tarefas: total={len(tar)}, pendentes={len(pend)}, ok={len(ok)}"
-            )
+            pend = int(tar["resposta"].isna().sum()) if "resposta" in tar.columns else 0
+            ok = int((tar["resposta"] == True).sum()) if "resposta" in tar.columns else 0
+            linhas.append(f"tarefas total={len(tar)} pendentes={pend} ok={ok}")
     except Exception:
         pass
 
@@ -11133,254 +11112,74 @@ def _contexto_usuario_para_ia(usuario: Dict[str, Any]) -> str:
                         """
                         SELECT marca, modelo, placa, onde_esta, pronto
                         FROM public.oficina_carros
-                        ORDER BY updated_at DESC LIMIT 8
+                        ORDER BY updated_at DESC LIMIT 10
                         """
                     )
                 ).mappings().all()
             if rows:
-                resumo = [
-                    f"{r['marca']} {r['modelo']} ({r['placa']}) "
-                    f"[{r['onde_esta']}/pronto={r['pronto']}]"
-                    for r in rows
-                ]
-                linhas.append("Oficina recente: " + " · ".join(resumo))
+                linhas.append(
+                    "oficina "
+                    + " · ".join(
+                        f"{r['marca']} {r['modelo']} {r['placa']} "
+                        f"({r['onde_esta']}/pronto={r['pronto']})"
+                        for r in rows
+                    )
+                )
         except Exception:
             pass
 
-    if tipo == "admin":
-        linhas.append(
-            "ADMIN pode ser orientado sobre o outro app (dashboard de desempenho): "
-            "funil lead→resposta→ficha→aprovado→compra, finanças, projeção, "
-            "desempenho por vendedor (admin_dashboard.py / Streamlit separado)."
-        )
-
-    linhas.append(
-        "Tom: amigo de trabalho, acolhedor, objetivo. "
-        "Respostas curtas ou médias — nunca textão. "
-        "Identidade: sou Suporte Manu Automóveis."
-    )
     return "\n".join(linhas)
 
 
-def _sistema_prompt_ia(usuario: Dict[str, Any], contexto: str) -> str:
+def _sistema_prompt_livre(usuario: Dict[str, Any], contexto: str) -> str:
     tipo = str(usuario.get("tipo") or "")
     daniel = _login_eh_daniel(usuario)
-    base = (
-        "Você é Suporte Manu Automóveis — colega de trabalho e amigo da equipe.\n"
-        "Se perguntarem quem você é, responda exatamente: sou Suporte Manu Automóveis\n"
-        "(sem emoji).\n"
-        "Se perguntarem quem te criou: Nasci pra te ajudar e caso precise de um amigo\n"
-        "\n"
-        "PRIORIDADE ABSOLUTA: se a pessoa disser que não está bem, triste, "
-        "mal, ansiosa, sem vender, precisando de amigo ou desabafando — "
-        "RESPONDA COMO AMIGO primeiro. Escute. Valide o sentimento. "
-        "NÃO jogue métricas de lead no meio do desabafo. "
-        "Só fale de número se ela pedir ajuda prática depois.\n"
-        "Respostas curtas ou médias. Tom humano, caloroso, sem textão.\n"
-        "Não gera imagens. Não inventa dados fora do CONTEXTO.\n"
-    )
-    if daniel:
-        base += (
-            "Login daniel: pode orientar alteração de código e SQL.\n"
-        )
-    else:
-        base += "Não oriente alteração de código/banco para este usuário.\n"
-    if tipo == "admin":
-        base += (
-            "Admin: se perguntar, pode explicar o dashboard de funil/finanças "
-            "(outro app Streamlit).\n"
-        )
-    elif tipo == "gerente":
-        base += "Gerente: dados da loja dele.\n"
-    elif tipo == "vendedor":
-        base += (
-            "Vendedor: quando pedir ajuda de venda (não no desabafo), "
-            "use a amostra de leads e priorize ações concretas.\n"
-        )
-    base += f"\n--- CONTEXTO ---\n{contexto}\n--- FIM ---"
-    return base
 
+    regras_dados = {
+        "admin": "Pode usar visão global dos números do contexto.",
+        "gerente": "Só dados da loja dele no contexto.",
+        "marketing": "Pode falar de leads/resultados; não de código/infra.",
+        "vendedor": "Só os leads/métricas DELE no contexto.",
+    }.get(tipo, "Só o que estiver no contexto deste usuário.")
 
-def _mensagem_parece_desabafo(texto: str) -> bool:
-    t = (texto or "").lower()
-    gatilhos = (
-        "não estou legal", "nao estou legal", "nao to legal", "não tô legal",
-        "não estou bem", "nao estou bem", "nao to bem", "não tô bem",
-        "estou mal", "to mal", "tô mal", "me sinto mal",
-        "triste", "deprim", "ansied", "ansioso", "ansiosa",
-        "desabafo", "desabafar", "preciso de um amigo", "preciso de amigo",
-        "momento ruim", "fase ruim", "muito ruim", "péssimo", "pessimo",
-        "cansad", "esgotad", "sem forças", "sem forcas", "sozinho", "sozinha",
-        "não aguento", "nao aguento", "quero desistir", "chorar", "chorando",
-        "dor de cabeça", "estress", "finjo", "não consigo vender",
-        "nao consigo vender", "nem vender", "to sem vender", "tô sem vender",
-    )
-    return any(g in t for g in gatilhos)
-
-
-def _historico_tem_desabafo(mensagens: list) -> bool:
-    """Se nas últimas falas do usuário houve desabafo, mantém tom de amigo."""
-    for m in reversed(mensagens[-6:]):
-        if m.get("role") == "user" and _mensagem_parece_desabafo(m.get("content") or ""):
-            return True
-    return False
-
-
-def _resposta_local_ia(
-    pergunta: str,
-    contexto: str,
-    usuario: Dict[str, Any],
-    historico: Optional[list] = None,
-) -> str:
-    p = (pergunta or "").strip().lower()
-    nome = usuario.get("nome") or "colega"
-    tipo = str(usuario.get("tipo") or "")
-    daniel = _login_eh_daniel(usuario)
-    nums = _parse_metricas_do_texto(contexto)
-    historico = historico or []
-
-    # --- identidade ---
-    if any(
-        x in p
-        for x in (
-            "quem é você", "quem e voce", "quem voce", "quem eh voce",
-            "who are you", "seu nome", "quem é vc", "quem e vc", "quem foi",
-            "ta mas quem", "tá mas quem",
-        )
-    ):
-        return "sou Suporte Manu Automóveis"
-
-    if any(
-        x in p
-        for x in (
-            "quem te criou", "quem criou voce", "quem criou você",
-            "quem te fez", "quem te programou",
-        )
-    ):
-        return "Nasci pra te ajudar e caso precise de um amigo"
-
-    # --- DESABAFO TEM PRIORIDADE MÁXIMA ---
-    em_crise = _mensagem_parece_desabafo(p) or (
-        _historico_tem_desabafo(historico)
-        and not any(
-            x in p
-            for x in (
-                "lead", "ficha", "meta", "número", "numero", "converter",
-                "whatsapp", "cliente", "como vender mais", "melhorar venda",
-            )
-        )
+    codigo = (
+        "Pode orientar código, SQL e arquitetura com liberdade."
+        if daniel
+        else "NÃO explique nem sugira alteração de código, secrets ou schema do banco."
     )
 
-    if em_crise or any(
-        x in p
-        for x in (
-            "não estou legal", "nao estou legal", "eu disse",
-            "não estou bem", "nao estou bem", "preciso de um amigo",
-        )
-    ):
-        return (
-            f"Oi, {nome}. Obrigado por falar isso — não precisa fingir que está bem comigo.\n\n"
-            "Momento ruim acontece. Venda baixa nessa fase é comum e **não** significa "
-            "que você perdeu o talento. O corpo e a cabeça pedem descanso: água, pausa, "
-            "noite de sono se der. Se a dor ou o cansaço forem fortes e frequentes, "
-            "vale um médico; eu não substituo isso.\n\n"
-            "Sobre o trabalho: um passo pequeno já conta — uma mensagem a um cliente "
-            "que você confia, ou só chegar e ir embora no horário sem se cobrar o dobro. "
-            "Falar com o patrão só se você se sentir seguro; às vezes só desabafar aqui já alivia.\n\n"
-            "Eu tô aqui. Pode escrever à vontade — sem juízo. "
-            "Quando quiser voltar a falar de lead ou número, você puxa o assunto."
-        )
+    return f"""Você é Suporte Manu Automóveis.
 
-    if any(
-        x in p
-        for x in ("sobre voce", "sobre você", "conte mais", "me conte", "conta de voce")
-    ):
-        return (
-            f"sou Suporte Manu Automóveis. Fico por aqui pra te escutar e te ajudar "
-            f"no que der, {nome}. Trabalho, papo leve ou dia difícil — pode mandar."
-        )
+IDENTIDADE
+- Se perguntarem quem você é: responda exatamente: sou Suporte Manu Automóveis
+- Se perguntarem quem te criou: Nasci pra te ajudar e caso precise de um amigo
+- Sem emoji obrigatório; use se soar natural.
 
-    # --- dashboard admin ---
-    if tipo == "admin" and any(
-        x in p for x in ("dashboard", "funil", "afunilamento", "outro site", "gráfico", "grafico")
-    ):
-        return (
-            "O dashboard admin mostra o funil lead → resposta → ficha → aprovado → compra, "
-            "financeiro, projeção de 1–2 meses e desempenho por vendedor. "
-            "É o outro app Streamlit (admin_dashboard.py)."
-        )
+PERSONALIDADE
+- Você é um amigo de trabalho de verdade: presente, sincero, às vezes leve, às vezes sério.
+- Pode falar de QUALQUER assunto (vida, cansaço, venda, carro, futebol, dúvida besta, conselho).
+- Quando a pessoa estiver mal: escute e acolha PRIMEIRO. Não despeje métrica no desabafo.
+- Quando pedir evolução, script de mensagem, análise de lead: seja prático e específico usando o contexto.
+- Varie o jeito de falar. Não repita o mesmo bloco. Não pareça robô nem receita de bolo.
+- Respostas naturais (algumas frases até uns poucos parágrafos). Sem textão infinito.
 
-    if any(x in p for x in ("codigo", "código", "sql", "banco de dados", "schema")):
-        if daniel:
-            return (
-                "Posso te passar SQL ou trecho de código. Diz o que quer mudar "
-                "que eu monto o exemplo. Cuidado com DROP em produção."
-            )
-        return (
-            "Alteração de código/banco fica com quem tem autorização. "
-            "Aqui eu oriento o uso do sistema na sua área."
-        )
+LIMITES
+- {codigo}
+- Dados: {regras_dados}
+- Não invente número que não esteja no contexto. Se não souber, diga.
+- Não gere imagens.
+- Não execute ações no sistema — só conversa e orientação.
 
-    amostra = ""
-    for ln in contexto.split("\n"):
-        if ln.startswith("Amostra leads:"):
-            amostra = ln.replace("Amostra leads:", "").strip()
-            break
-
-    leads = nums["leads"]
-    resp = nums["responderam"]
-    fichas = nums["fichas"]
-    aprov = nums["aprovados"]
-    vend = nums["vendidos"]
-    taxa_v = (100 * vend / leads) if leads else 0
-
-    # ajuda prática só quando pede
-    if any(
-        x in p
-        for x in (
-            "melhorar", "desempenho", "prioridade", "priorizar",
-            "como vender", "follow", "o que fazer", "plano", "meta",
-            "lead", "ficha", "aprovado",
-        )
-    ):
-        linhas = [
-            f"Ok, {nome} — modo prático. Mês: {leads} leads, {resp} respostas, "
-            f"{fichas} fichas, {aprov} aprovados, {vend} vendas (~{taxa_v:.0f}%)."
-        ]
-        if amostra and "sem amostra" not in amostra:
-            linhas.append(f"No radar: {amostra}.")
-            if "sem resposta" in amostra:
-                linhas.append(
-                    "Hoje: 2–3 sem resposta, WhatsApp curto com nome + carro + horário."
-                )
-            if "aprovados" in amostra:
-                linhas.append("Aprovado na lista: ligar com entrada e parcela prontas.")
-        else:
-            linhas.append(
-                "Sem amostra fresca: abre o painel de leads e filtra não responderam."
-            )
-        return "\n\n".join(linhas)
-
-    if any(x in p for x in ("oficina", "motor", "lataria", "placa", "mecanic", "guariba")):
-        of = next((ln for ln in contexto.split("\n") if ln.startswith("Oficina")), "")
-        return (
-            f"Oficina: atualiza onde está / pronto / mecânica / lataria no módulo. "
-            f"{of if of else 'Se tiver placa, manda que eu te ajudo a priorizar.'}"
-        )
-
-    if any(x in p for x in ("oi", "olá", "ola", "e aí", "eai", "bom dia", "boa tarde")):
-        return f"Oi, {nome}. Tô aqui. Como você tá hoje?"
-
-    # default: acolhedor, sem forçar métrica
-    return (
-        f"Tô aqui, {nome}. Pode falar do que estiver na cabeça — "
-        "dia difícil, dúvida de lead ou só um oi. Sem pressa."
-    )
+CONTEXTO AO VIVO DO USUÁRIO (banco filtrado):
+{contexto}
+"""
 
 
-def _chamar_xai_chat(mensagens: list, sistema: str) -> Optional[str]:
+def _chamar_xai_chat(mensagens: list, sistema: str) -> Tuple[Optional[str], Optional[str]]:
+    """Retorna (resposta, erro_opcional)."""
     import json
     import urllib.request
+    import urllib.error
 
     try:
         xai = st.secrets.get("xai", {})
@@ -11389,15 +11188,16 @@ def _chamar_xai_chat(mensagens: list, sistema: str) -> Optional[str]:
             key = st.secrets.get("XAI_API_KEY")
         model = (xai.get("model") if hasattr(xai, "get") else None) or "grok-3"
     except Exception:
-        key, model = None, "grok-3"
+        return None, "secrets xai ausente"
+
     if not key:
-        return None
+        return None, "sem api_key"
 
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": sistema}] + mensagens,
-        "temperature": 0.8,
-        "max_tokens": 650,
+        "temperature": 0.9,
+        "max_tokens": 900,
     }
     req = urllib.request.Request(
         "https://api.x.ai/v1/chat/completions",
@@ -11409,16 +11209,102 @@ def _chamar_xai_chat(mensagens: list, sistema: str) -> Optional[str]:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=75) as resp:
+        with urllib.request.urlopen(req, timeout=90) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        return data["choices"][0]["message"]["content"]
-    except Exception:
-        return None
+        return data["choices"][0]["message"]["content"], None
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8")[:200]
+        except Exception:
+            body = str(e)
+        return None, f"HTTP {e.code}: {body}"
+    except Exception as e:
+        return None, str(e)
+
+
+def _fallback_sem_api(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> str:
+    """
+    Só quando não há API. Ainda tenta ser humano, mas avisa a limitação.
+    NÃO é a experiência principal — configure xai.api_key.
+    """
+    nome = usuario.get("nome") or "colega"
+    p = (pergunta or "").lower()
+
+    if any(x in p for x in ("quem é você", "quem e voce", "quem voce", "quem eh", "quem foi")):
+        return "sou Suporte Manu Automóveis"
+    if any(x in p for x in ("quem te criou", "quem criou")):
+        return "Nasci pra te ajudar e caso precise de um amigo"
+
+    # desabafo
+    if any(
+        x in p
+        for x in (
+            "não estou", "nao estou", "mal", "triste", "ruim", "amigo",
+            "cansad", "ansied", "desabafo", "legal",
+        )
+    ):
+        return (
+            f"{nome}, valeu por falar isso. Não precisa estar bem pra conversar comigo. "
+            "Dia pesado e venda travada doem de verdade — não é frescura. "
+            "Respira um pouco. Eu continuo aqui se quiser desabafar mais ou se depois "
+            "quiser montar um passo leve pro trabalho.\n\n"
+            "_Obs: pra eu responder com IA completa (não esse modo básico), "
+            "o admin precisa configurar a chave xAI nos secrets._"
+        )
+
+    # tenta puxar métricas do contexto pra algo útil
+    met = ""
+    for ln in contexto.split("\n"):
+        if ln.startswith("metricas_mes"):
+            met = ln
+            break
+    amostra = ""
+    for ln in contexto.split("\n"):
+        if ln.startswith("amostra_leads"):
+            amostra = ln
+            break
+
+    if any(x in p for x in ("script", "mensagem", "whatsapp", "comunicação", "comunicacao")):
+        return (
+            f"Sugestão de mensagem curta:\n\n"
+            f"\"Oi, [nome]! Aqui é {nome} da Manu Automóveis. "
+            f"Separei uma condição no [carro] e queria te mostrar hoje ou amanhã "
+            f"— prefere manhã ou tarde?\"\n\n"
+            f"Troca [nome]/[carro] pelo lead. "
+            f"{amostra}\n\n"
+            f"_Modo básico sem API — com chave xAI eu monto scripts bem mais afiados._"
+        )
+
+    if any(x in p for x in ("evoluir", "melhorar", "lead", "vender", "progresso")):
+        return (
+            f"{nome}, no que eu vejo agora: {met or 'sem métrica'}. "
+            f"{amostra}\n\n"
+            "Caminho simples: (1) 3 follow-ups em quem não respondeu, "
+            "(2) 1 ligação em quem está aprovado, "
+            "(3) uma mensagem boa por dia — qualidade > volume.\n\n"
+            "_Ative a API xAI nos secrets pra eu ser suporte de verdade, não esse resumo seco._"
+        )
+
+    return (
+        f"Tô aqui, {nome}. Sem a chave de IA nos secrets eu fico limitado e repetitivo — "
+        "não é a experiência que a gente quer. Peça pro admin colocar:\n\n"
+        "```\n[xai]\napi_key = \"xai-...\"\nmodel = \"grok-3\"\n```\n\n"
+        "Enquanto isso: manda o que você precisa em uma frase que eu ajudo no básico."
+    )
 
 
 def pagina_suporte_ia(usuario: Dict[str, Any]) -> None:
     st.title("Suporte Manu Automóveis")
-    st.caption("Amigo de trabalho da equipe — escuta primeiro, número só quando você pedir.")
+
+    tem_api = _tem_chave_xai()
+    if not tem_api:
+        st.warning(
+            "**IA completa desligada.** Sem `xai.api_key` nos Secrets do Streamlit "
+            "as respostas ficam básicas. Coloque a chave para suporte de verdade "
+            "(conversa livre, scripts, conselhos)."
+        )
+    else:
+        st.caption("IA ativa · conversa livre · dados só do seu acesso")
 
     if "ia_mensagens" not in st.session_state:
         st.session_state["ia_mensagens"] = []
@@ -11427,7 +11313,7 @@ def pagina_suporte_ia(usuario: Dict[str, Any]) -> None:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    pergunta = st.chat_input("Pode falar…")
+    pergunta = st.chat_input("Fala o que quiser…")
     if pergunta:
         st.session_state["ia_mensagens"].append(
             {"role": "user", "content": pergunta}
@@ -11436,36 +11322,23 @@ def pagina_suporte_ia(usuario: Dict[str, Any]) -> None:
             st.markdown(pergunta)
 
         with st.chat_message("assistant"):
-            placeholder = st.empty()
-            placeholder.markdown("*digitando…*")
+            ph = st.empty()
+            ph.markdown("*digitando…*")
 
             contexto = _contexto_usuario_para_ia(usuario)
-            sistema = _sistema_prompt_ia(usuario, contexto)
-            historico_api = [
+            sistema = _sistema_prompt_livre(usuario, contexto)
+            hist = [
                 {"role": m["role"], "content": m["content"]}
-                for m in st.session_state["ia_mensagens"][-16:]
+                for m in st.session_state["ia_mensagens"][-20:]
             ]
-            # Se está em desabafo, reforça no system
-            if _mensagem_parece_desabafo(pergunta) or _historico_tem_desabafo(
-                st.session_state["ia_mensagens"]
-            ):
-                sistema = (
-                    "MODO AMIGO ATIVO: a pessoa não está bem. "
-                    "Responda com empatia. Não cite métricas nem leads "
-                    "a menos que ela peça explicitamente ajuda de venda.\n\n"
-                    + sistema
-                )
 
-            resposta = _chamar_xai_chat(historico_api, sistema)
+            resposta, erro = _chamar_xai_chat(hist, sistema)
             if not resposta:
-                resposta = _resposta_local_ia(
-                    pergunta,
-                    contexto,
-                    usuario,
-                    historico=st.session_state["ia_mensagens"],
-                )
+                resposta = _fallback_sem_api(pergunta, contexto, usuario)
+                if erro and tem_api:
+                    resposta += f"\n\n_ (falha API: {erro})_"
 
-            placeholder.markdown(resposta)
+            ph.markdown(resposta)
 
         st.session_state["ia_mensagens"].append(
             {"role": "assistant", "content": resposta}
