@@ -10268,7 +10268,6 @@ def html_autorizacao_faturamento(dados: dict) -> str:
       BANCO: {v('fin_banco')} &nbsp;
       QUANT. DE PARCELAS: {v('fin_parcelas')} &nbsp;
       VALOR DA PARCELA R$: {money('fin_valor_parcela')}
-      &nbsp;|&nbsp;
     </td>
   </tr>
 </table>
