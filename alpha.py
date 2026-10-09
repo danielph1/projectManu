@@ -1367,6 +1367,8 @@ def buscar_leads(
             l.habilitado,
             l.aprovou_credito,
             l.carro_selecionado,
+            l.marca_carro,
+            l.cor_carro,
             l.ano_carro,
             l.placa_carro,
             l.valor_carro,
@@ -3643,17 +3645,25 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
             ficha_col_1, ficha_col_2 = st.columns(2)
             with ficha_col_1:
                 novo_carro_selecionado = st.text_input(
-                    "Carro selecionado",
+                    "Carro selecionado / modelo",
                     value=(
                         valor_lead("carro_selecionado")
                         or valor_lead("produto_interesse")
                     ),
+                )
+                nova_marca_carro = st.text_input(
+                    "Marca do carro*",
+                    value=valor_lead("marca_carro") or "",
                 )
                 nova_placa_carro = st.text_input(
                     "Placa do carro",
                     value=valor_lead("placa_carro"),
                     placeholder="ABC1D23",
                     max_chars=8,
+                )
+                nova_cor_carro = st.text_input(
+                    "Cor do carro*",
+                    value=valor_lead("cor_carro") or "",
                 )
             with ficha_col_2:
                 novo_ano_carro = st.number_input(
@@ -3881,6 +3891,8 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                 END,
                 produto_interesse = :carro_selecionado,
                 carro_selecionado = :carro_selecionado,
+                marca_carro = :marca_carro,
+                cor_carro = :cor_carro,
                 ano_carro = :ano_carro,
                 placa_carro = :placa_carro,
                 valor_carro = :valor_carro,
@@ -3926,6 +3938,16 @@ def editar_lead_modal(lead_data: pd.Series, df_vendedores: pd.DataFrame):
                     "data_nascimento": nascimento_convertido,
                     "carro_selecionado": (
                         vazio_para_none(novo_carro_selecionado)
+                        if gerou_ficha
+                        else None
+                    ),
+                    "marca_carro": (
+                        vazio_para_none(nova_marca_carro)
+                        if gerou_ficha
+                        else None
+                    ),
+                    "cor_carro": (
+                        vazio_para_none(nova_cor_carro)
                         if gerou_ficha
                         else None
                     ),
@@ -4649,13 +4671,15 @@ def mostrar_formulario_novo_lead(
 
     if gerou_ficha and not anexos_ficha and (
         not carro_selecionado.strip()
+        or not marca_carro.strip()
+        or not cor_carro.strip()
         or not placa_carro.strip()
         or not ano_carro
         or valor_carro is None
         or valor_carro <= 0
     ):
         st.warning(
-            "Ao gerar a ficha, informe carro selecionado, placa, ano "
+            "Ao gerar a ficha, informe carro, marca, cor, placa, ano "
             "e valor do carro."
         )
         return
@@ -4684,6 +4708,8 @@ def mostrar_formulario_novo_lead(
                 aprovou_credito,
                 produto_interesse,
                 carro_selecionado,
+                marca_carro,
+                cor_carro,
                 ano_carro,
                 placa_carro,
                 valor_carro,
@@ -4707,6 +4733,8 @@ def mostrar_formulario_novo_lead(
                 :aprovou_credito,
                 :produto_interesse,
                 :carro_selecionado,
+                :marca_carro,
+                :cor_carro,
                 :ano_carro,
                 :placa_carro,
                 :valor_carro,
@@ -4749,6 +4777,16 @@ def mostrar_formulario_novo_lead(
                     "carro_selecionado": (
                         carro_selecionado.strip()
                         if gerou_ficha
+                        else None
+                    ),
+                    "marca_carro": (
+                        marca_carro.strip()
+                        if gerou_ficha and marca_carro.strip()
+                        else None
+                    ),
+                    "cor_carro": (
+                        cor_carro.strip()
+                        if gerou_ficha and cor_carro.strip()
                         else None
                     ),
                     "ano_carro": (
@@ -7615,7 +7653,7 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                     )
                     b1, b2 = st.columns(2)
                     boleto_valor = b1.number_input(
-                        "Valor da parcela do boleto",
+                        "Valor do boleto",
                         min_value=0.0,
                         value=numero_seguro(ficha.get("boleto_valor")),
                         step=10.0,
@@ -9893,6 +9931,8 @@ def carregar_venda_para_faturamento(ficha_id: int) -> dict:
             l.carro_selecionado AS modelo,
             l.ano_carro AS ano_modelo,
             l.placa_carro AS placa,
+            l.marca_carro AS marca,
+            l.cor_carro AS cor,
             l.valor_carro,
             f.valor_veiculo,
             f.valor_financiado,
@@ -9927,14 +9967,17 @@ def carregar_venda_para_faturamento(ficha_id: int) -> dict:
     obs_boleto = ""
     if dados.get("gerou_boleto") and dados.get("boleto_meses"):
         try:
-            bv = float(dados.get("boleto_valor") or 0)
+            bv = float(dados.get("boleto_valor") or 0)  # valor da parcela do boleto
             bm = int(dados.get("boleto_meses") or 0)
-            bt = float(dados.get("boleto_total") or (bv * bm))
+            bt = float(dados.get("boleto_total") or (bv * bm))  # TOTAL
             obs_boleto = (
                 f"Observação: boleto de R$ {bt:,.2f}. "
                 f"{bm}x de R$ {bv:,.2f}."
             ).replace(",", "X").replace(".", ",").replace("X", ".")
-            dados["entrada_boleto_sugerida"] = bv  # valor unitário no campo entrada
+            # Campo "Boleto (entrada)" usa o TOTAL (parcela x meses)
+            dados["entrada_boleto_sugerida"] = bt
+            dados["boleto_parcela"] = bv
+            dados["boleto_qtd"] = bm
         except Exception:
             obs_boleto = ""
             dados["entrada_boleto_sugerida"] = 0.0
@@ -10114,6 +10157,112 @@ Pelo presente instrumento a empresa declara as condições de garantia do motor 
 </body>
 </html>
 """
+
+
+
+
+def baixar_bytes_storage(bucket: str, path: str) -> Optional[bytes]:
+    """Baixa arquivo do Storage (service_role)."""
+    import urllib.request
+    base_url, key = _supabase_config()
+    if not base_url or not key or not path:
+        return None
+    url = (
+        f"{base_url.rstrip('/')}/storage/v1/object/{bucket}/{path.lstrip('/')}"
+    )
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {key}", "apikey": key},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read()
+    except Exception:
+        return None
+
+
+def anexos_html_para_impressao(faturamento_id: int) -> str:
+    """
+    Monta seção HTML dos anexos (imagens embutidas em base64; PDFs com link).
+    """
+    import base64
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT storage_bucket, storage_path, nome_arquivo
+                    FROM public.faturamento_anexos
+                    WHERE faturamento_id = :id
+                    ORDER BY id
+                    """
+                ),
+                {"id": faturamento_id},
+            ).mappings().all()
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+
+    partes = [
+        '<div class="anexos-print" style="page-break-before: always;">',
+        "<h3>Anexos / comprovantes</h3>",
+    ]
+    for r in rows:
+        bucket = r.get("storage_bucket") or STORAGE_BUCKET_ARQUIVOS
+        path = r.get("storage_path") or ""
+        nome = r.get("nome_arquivo") or path.split("/")[-1]
+        data = baixar_bytes_storage(bucket, path)
+        lower = nome.lower()
+        if data and any(lower.endswith(ext) for ext in (
+            ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"
+        )):
+            # detect mime
+            mime = "image/jpeg"
+            if lower.endswith(".png"):
+                mime = "image/png"
+            elif lower.endswith(".webp"):
+                mime = "image/webp"
+            elif lower.endswith(".gif"):
+                mime = "image/gif"
+            b64 = base64.b64encode(data).decode("ascii")
+            partes.append(
+                f'<p><b>{nome}</b></p>'
+                f'<img src="data:{mime};base64,{b64}" '
+                f'style="max-width:100%; max-height:900px;"/>'
+            )
+        elif data and lower.endswith(".pdf"):
+            b64 = base64.b64encode(data).decode("ascii")
+            partes.append(
+                f'<p><b>{nome}</b> (PDF — abra o arquivo baixado para imprimir)</p>'
+                f'<embed src="data:application/pdf;base64,{b64}" '
+                f'type="application/pdf" width="100%" height="500px"/>'
+            )
+        else:
+            partes.append(f"<p>Anexo: {nome} (baixe separadamente se necessário)</p>")
+    partes.append("</div>")
+    return "\n".join(partes)
+
+
+def html_completo_faturamento(faturamento_id: int, dados: Optional[dict] = None) -> str:
+    """HTML do formulário + anexos embutidos para impressão/download."""
+    if dados is None:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT * FROM public.faturamentos WHERE id = :id"),
+                {"id": faturamento_id},
+            ).mappings().first()
+        if not row:
+            return ""
+        dados = dict(row)
+        dados["fin_parcelas"] = dados.get("fin_parcelas")
+    base = html_autorizacao_faturamento(dados)
+    # injeta anexos antes de </body>
+    anexos = anexos_html_para_impressao(faturamento_id)
+    if anexos and "</body>" in base:
+        base = base.replace("</body>", anexos + "\n</body>")
+    return base
 
 
 def salvar_faturamento_db(usuario: dict, dados: dict) -> int:
@@ -10315,7 +10464,11 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
         v4, v5, v6 = st.columns(3)
         placa = v4.text_input("Placa*", value=str(pre.get("placa") or ""))
         cor = v5.text_input("Cor*", value=str(pre.get("cor") or ""))
-        km = v6.text_input("Kilometragem*", value=str(pre.get("kilometragem") or ""))
+        km = v6.text_input(
+            "Kilometragem (opcional)",
+            value=str(pre.get("kilometragem") or ""),
+            help="Pode ser preenchido a caneta na impressão.",
+        )
 
         st.subheader("I. Negociação — Entrada (detalhe manual)")
         st.caption(
@@ -10334,7 +10487,7 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
             min_value=0.0,
             step=100.0,
             value=float(pre.get("entrada_boleto_sugerida") or 0),
-            help="Valor do boleto informado na compra (não é parcela do financiamento).",
+            help="Total do boleto (parcela × meses). Ex.: 10×500 = R$ 5.000.",
         )
         n6.metric("Total entrada (venda)", f"R$ {entrada_total_venda:,.2f}")
 
@@ -10409,7 +10562,6 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
             "Ano/modelo": ano_modelo,
             "Placa": placa,
             "Cor": cor,
-            "Kilometragem": km,
             "Banco": fin_banco,
         }
         faltando = [k for k, v in obrigatorios.items() if not str(v or "").strip()]
@@ -10508,8 +10660,31 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
                     except Exception as err_an:
                         st.warning(f"Anexo {getattr(arq,'name', '?')} falhou: {err_an}")
 
+            # Regenera HTML com anexos embutidos (para imprimir junto)
+            html_full = html_completo_faturamento(fid, dados)
+            # atualiza storage
+            caminho2 = caminho_storage_unico(
+                f"faturamentos/{fid}", f"faturamento_{fid}.html"
+            )
+            upload_para_storage(
+                STORAGE_BUCKET_ARQUIVOS,
+                caminho2,
+                html_full.encode("utf-8"),
+                "text/html; charset=utf-8",
+            )
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE public.faturamentos
+                        SET storage_bucket = :b, storage_path = :p, updated_at = NOW()
+                        WHERE id = :id
+                        """
+                    ),
+                    {"b": STORAGE_BUCKET_ARQUIVOS, "p": caminho2, "id": fid},
+                )
             st.success(f"Faturamento #{fid} salvo.")
-            st.session_state["faturamento_html_preview"] = html
+            st.session_state["faturamento_html_preview"] = html_full
             st.session_state["faturamento_id_preview"] = fid
         except Exception as erro:
             st.error(
@@ -10519,20 +10694,23 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
             )
 
     if st.session_state.get("faturamento_html_preview"):
-        st.subheader(
-            f"Pré-visualização — #{st.session_state.get('faturamento_id_preview')}"
+        fid_prev = st.session_state.get("faturamento_id_preview")
+        st.subheader(f"Pré-visualização — #{fid_prev}")
+        st.caption(
+            "Ctrl+P / Cmd+P imprime formulário + anexos (imagens). "
+            "PDFs: use o download do anexo se o navegador não embutir."
         )
-        st.caption("Ctrl+P / Cmd+P para imprimir. Documentista escolhe se inclui anexos.")
         __import__("streamlit.components.v1", fromlist=["html"]).html(
             st.session_state["faturamento_html_preview"],
             height=900,
             scrolling=True,
         )
         st.download_button(
-            "Baixar HTML",
+            "⬇️ Baixar HTML (formulário + anexos)",
             data=st.session_state["faturamento_html_preview"].encode("utf-8"),
-            file_name=f"faturamento_{st.session_state.get('faturamento_id_preview')}.html",
+            file_name=f"faturamento_{fid_prev}.html",
             mime="text/html",
+            key=f"dl_html_preview_{fid_prev}",
         )
 
     # ---- Histórico com filtros ----
@@ -10612,6 +10790,28 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
                 sel = st.selectbox("Selecionar faturamento", ids, key="fat_sel_hist")
                 row = hist[hist["id"] == sel].iloc[0]
                 ja_editou = bool(row.get("obs_editada_uma_vez"))
+
+                # Download / pré-visualização sempre disponível
+                try:
+                    html_hist = html_completo_faturamento(int(sel))
+                except Exception as err_h:
+                    html_hist = ""
+                    st.caption(f"Não gerou HTML: {err_h}")
+                if html_hist:
+                    st.download_button(
+                        "⬇️ Baixar HTML deste faturamento",
+                        data=html_hist.encode("utf-8"),
+                        file_name=f"faturamento_{int(sel)}.html",
+                        mime="text/html",
+                        key=f"dl_html_hist_{int(sel)}",
+                    )
+                    if st.button(
+                        "Ver / imprimir este faturamento",
+                        key=f"ver_fat_{int(sel)}",
+                    ):
+                        st.session_state["faturamento_html_preview"] = html_hist
+                        st.session_state["faturamento_id_preview"] = int(sel)
+                        st.rerun()
                 if not ja_editou:
                     nova_obs = st.text_area(
                         "Editar observações (somente 1 vez)",
