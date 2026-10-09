@@ -11,6 +11,14 @@ from sqlalchemy import create_engine, text
 
 cookie_manager = CookieManager()
 
+# ---------------------------------------------------------------------------
+# CADASTRO ABERTO (Supabase Auth)
+# True  = mostra aba "Criar conta" na tela de login (fase de implantação)
+# False = só login (produção / sigilo — funcionários já cadastrados)
+# ---------------------------------------------------------------------------
+CADASTRO_ABERTO = True
+
+
 from datetime import datetime, timedelta
 
 def salvar_sessao(usuario: dict, dias: int = 30):
@@ -230,7 +238,7 @@ ROLE_ALIASES = {
     "mecânico": "mecanico",
 }
 
-LOJAS_DISPONIVEIS = ("381", "764", "NINA")
+LOJAS_DISPONIVEIS = ("381", "746", "NINA")
 
 
 def normalizar_loja(loja: Any) -> str:
@@ -296,6 +304,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "view_credit_fichas",
         "edit_own_credit_data",
         "view_oficina",
+        "view_faturamento",
     },
     # admin = poder global (todas as lojas)
     "admin": {
@@ -318,6 +327,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "edit_sales_boleto",
         "view_financial",
         "view_oficina",
+        "view_faturamento",
     },
     "financeiro": {
         "view_leads",
@@ -332,6 +342,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "edit_sales_boleto",
         "view_credit_metrics",
         "view_oficina",
+        "view_faturamento",
     },
     "documentista": {
         "view_leads",
@@ -345,6 +356,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "view_goals",
         "view_credit_fichas",
         "view_oficina",
+        "view_faturamento",
     },
     # Oficina: sem leads, transferências nem fichas de crédito.
     "guariba": {
@@ -634,6 +646,223 @@ def verificar_senha(senha_digitada: str, senha_salva: str) -> tuple[bool, bool]:
 # ============================================================
 # AUTENTICAÇÃO E SESSÃO
 # ============================================================
+
+
+# ============================================================
+# SUPABASE AUTH (cadastro / login opcional)
+# ============================================================
+#
+# Secrets:
+#   [supabase]
+#   url = "https://xxx.supabase.co"
+#   service_role_key = "sb_secret_..."   # ou anon publishable se Auth permitir
+#   anon_key = "sb_publishable_..."      # preferível para signup/login do usuário
+#
+# Fluxo:
+#   1. signup no Auth → cria auth.users
+#   2. insert em public.usuarios com auth_user_id + tipo + loja
+#   3. login: Auth valida senha; perfil/tipo vêm de public.usuarios
+# Cadastro pode ser desligado com CADASTRO_ABERTO = False
+# ============================================================
+
+def _supabase_anon_key() -> Optional[str]:
+    try:
+        cfg = st.secrets.get("supabase", {})
+        return (
+            cfg.get("anon_key")
+            or cfg.get("publishable_key")
+            or cfg.get("service_role_key")
+            or cfg.get("key")
+        )
+    except Exception:
+        return None
+
+
+def supabase_auth_request(
+    path: str,
+    payload: dict,
+    use_service: bool = False,
+) -> tuple[bool, dict]:
+    """POST em /auth/v1/{path}. Retorna (ok, json)."""
+    import urllib.request
+    import urllib.error
+    import json as _json
+
+    base_url, service_key = _supabase_config()
+    anon = _supabase_anon_key()
+    key = service_key if use_service else (anon or service_key)
+    if not base_url or not key:
+        return False, {"error": "supabase não configurado nos secrets"}
+
+    url = f"{base_url.rstrip('/')}/auth/v1/{path.lstrip('/')}"
+    body = _json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {key}",
+            "apikey": key,
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8")
+            data = _json.loads(raw) if raw else {}
+            return True, data
+    except urllib.error.HTTPError as erro:
+        try:
+            data = _json.loads(erro.read().decode("utf-8"))
+        except Exception:
+            data = {"error": str(erro)}
+        return False, data
+    except Exception as erro:
+        return False, {"error": str(erro)}
+
+
+def cadastrar_usuario_supabase(
+    nome: str,
+    login: str,
+    email: str,
+    senha: str,
+    tipo: str,
+    loja: str,
+) -> tuple[bool, str]:
+    """
+    Cria conta no Supabase Auth + linha em public.usuarios.
+    Tipo/loja são gravados só na tabela local (integridade de perfil).
+    """
+    nome = (nome or "").strip()
+    login = (login or "").strip().lower()
+    email = (email or "").strip().lower()
+    tipo_n = normalizar_tipo(tipo)
+    loja_n = normalizar_loja(loja)
+
+    if not nome or not login or not email or not senha:
+        return False, "Preencha nome, login, e-mail e senha."
+    if tipo_n not in PERMISSIONS:
+        return False, f"Tipo '{tipo}' inválido."
+    if len(senha) < 6:
+        return False, "Senha deve ter pelo menos 6 caracteres."
+
+    # Impede login duplicado na tabela local
+    try:
+        with engine.connect() as conn:
+            existe = conn.execute(
+                text(
+                    """
+                    SELECT id FROM public.usuarios
+                    WHERE LOWER(login) = LOWER(:login)
+                       OR LOWER(COALESCE(email, '')) = LOWER(:email)
+                    LIMIT 1
+                    """
+                ),
+                {"login": login, "email": email},
+            ).scalar()
+            if existe:
+                return False, "Já existe usuário com este login ou e-mail."
+    except Exception as erro:
+        return False, f"Erro ao verificar usuário: {erro}"
+
+    ok, data = supabase_auth_request(
+        "signup",
+        {"email": email, "password": senha},
+        use_service=False,
+    )
+    if not ok:
+        msg = data.get("msg") or data.get("error_description") or data.get("error") or str(data)
+        return False, f"Auth: {msg}"
+
+    user = data.get("user") or {}
+    auth_uid = user.get("id")
+    if not auth_uid:
+        # alguns retornos colocam em data.id
+        auth_uid = data.get("id")
+
+    senha_hash = criar_hash_senha(senha)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO public.usuarios (
+                        nome, login, senha_hash, tipo, loja,
+                        email, auth_user_id, ativo
+                    )
+                    VALUES (
+                        :nome, :login, :senha_hash, :tipo, :loja,
+                        :email, :auth_user_id, TRUE
+                    )
+                    """
+                ),
+                {
+                    "nome": nome,
+                    "login": login,
+                    "senha_hash": senha_hash,
+                    "tipo": tipo_n,
+                    "loja": loja_n,
+                    "email": email,
+                    "auth_user_id": auth_uid,
+                },
+            )
+    except Exception as erro:
+        return False, (
+            f"Auth criado, mas falhou ao gravar perfil local: {erro}. "
+            "Rode schema_auth_faturamento_realtime.sql"
+        )
+
+    return True, "Conta criada. Faça login."
+
+
+def autenticar_via_supabase_email(email: str, senha: str) -> bool:
+    """Login pelo Auth; carrega tipo/loja de public.usuarios."""
+    ok, data = supabase_auth_request(
+        "token?grant_type=password",
+        {"email": email.strip(), "password": senha},
+        use_service=False,
+    )
+    if not ok:
+        return False
+    user = data.get("user") or {}
+    auth_uid = user.get("id")
+    if not auth_uid:
+        return False
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                text(
+                    """
+                    SELECT id, nome, login, tipo, vendedor_id, loja, ativo
+                    FROM public.usuarios
+                    WHERE auth_user_id::text = :uid
+                       OR LOWER(COALESCE(email, '')) = LOWER(:email)
+                    LIMIT 1
+                    """
+                ),
+                {"uid": auth_uid, "email": email.strip()},
+            ).mappings().first()
+        if not result or result["ativo"] is False:
+            return False
+        tipo = normalizar_tipo(result["tipo"])
+        if tipo not in PERMISSIONS:
+            return False
+        st.session_state["usuario_logado"] = {
+            "id": result["id"],
+            "nome": result["nome"],
+            "login": result["login"],
+            "tipo": tipo,
+            "tipo_original": result["tipo"],
+            "vendedor_id": result["vendedor_id"],
+            "loja": normalizar_loja(result.get("loja", "381")),
+            "is_admin": tipo in {"admin", "gerente"},
+            "auth_user_id": auth_uid,
+        }
+        salvar_sessao(st.session_state["usuario_logado"])
+        return True
+    except Exception:
+        return False
+
 
 def autenticar(login_input: str, senha_input: str) -> bool:
     try:
@@ -3868,23 +4097,67 @@ def mostrar_login() -> None:
     with coluna_login:
         with st.container(border=True):
             st.title("Acesso ao sistema")
-            st.subheader("Entrar no sistema")
 
-            with st.form("form_login"):
-                login = st.text_input("Usuário")
-                senha = st.text_input("Senha", type="password")
-                entrar = st.form_submit_button(
-                    "Entrar",
-                    use_container_width=True,
-                    type="primary",
-                )
+            abas = ["Entrar"]
+            if CADASTRO_ABERTO:
+                abas.append("Criar conta")
+            tab_entrar, *rest = st.tabs(abas)
+            tab_cadastro = rest[0] if rest else None
 
-            if entrar:
-                if autenticar(login, senha):
-                    st.success("Login realizado com sucesso.")
-                    st.rerun()
-                else:
-                    st.error("Usuário ou senha incorretos.")
+            with tab_entrar:
+                st.caption("Login com usuário local ou e-mail (Supabase Auth).")
+                with st.form("form_login"):
+                    login = st.text_input("Usuário ou e-mail")
+                    senha = st.text_input("Senha", type="password")
+                    entrar = st.form_submit_button(
+                        "Entrar",
+                        use_container_width=True,
+                        type="primary",
+                    )
+
+                if entrar:
+                    ok = autenticar(login, senha)
+                    if not ok and "@" in (login or ""):
+                        ok = autenticar_via_supabase_email(login, senha)
+                    if ok:
+                        st.success("Login realizado com sucesso.")
+                        st.rerun()
+                    else:
+                        st.error("Usuário ou senha incorretos.")
+
+            if tab_cadastro is not None:
+                with tab_cadastro:
+                    st.caption(
+                        "Cadastro temporário para funcionários. "
+                        "Desative com CADASTRO_ABERTO = False no código."
+                    )
+                    tipos_cadastro = [
+                        t for t in (
+                            "vendedor", "gerente", "elfen_ai", "financeiro",
+                            "documentista", "guariba", "mecanico", "admin",
+                        )
+                        if t in PERMISSIONS
+                    ]
+                    with st.form("form_cadastro"):
+                        nome = st.text_input("Nome completo*")
+                        login_c = st.text_input("Login* (sem espaços)")
+                        email_c = st.text_input("E-mail*")
+                        senha_c = st.text_input("Senha*", type="password")
+                        tipo_c = st.selectbox("Perfil / tipo*", tipos_cadastro)
+                        loja_c = st.selectbox("Loja*", list(LOJAS_DISPONIVEIS))
+                        criar = st.form_submit_button(
+                            "Criar conta",
+                            use_container_width=True,
+                            type="primary",
+                        )
+                    if criar:
+                        ok, msg = cadastrar_usuario_supabase(
+                            nome, login_c, email_c, senha_c, tipo_c, loja_c
+                        )
+                        if ok:
+                            st.success(msg)
+                        else:
+                            st.error(msg)
 
 
 def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
@@ -3985,6 +4258,15 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
             ):
                 st.session_state["pagina_atual"] = "fichas"
                 st.session_state["abrir_formulario"] = False
+                st.rerun()
+
+        if usuario_tem("view_faturamento") or usuario_e_gestor():
+            if st.button(
+                "Faturamento",
+                use_container_width=True,
+                type="primary" if pagina == "faturamento" else "secondary",
+            ):
+                st.session_state["pagina_atual"] = "faturamento"
                 st.rerun()
 
         if usuario_e_gestor() or usuario.get("tipo") == "vendedor":
@@ -8599,7 +8881,7 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
                             st.error(f"Erro ao atualizar meta: {erro}")
 
                 if st.button(
-                    "Remover meta",
+                    "🗑️ Remover meta",
                     key=f"remover_meta_{meta['id']}",
                 ):
                     try:
@@ -9137,7 +9419,7 @@ def pagina_oficina(usuario: Dict[str, Any]) -> None:
             return
 
         for _, carro in df.iterrows():
-            status = "✅ Pronto" if bool(carro.get("pronto")) else "Em andamento"
+            status = "✅ Pronto" if bool(carro.get("pronto")) else "🔧 Em andamento"
             titulo = (
                 f"{status} · {carro.get('marca') or '-'} "
                 f"{carro.get('modelo') or '-'} "
@@ -9313,7 +9595,7 @@ def pagina_whatsapp(usuario: Dict[str, Any]) -> None:
         )
         # Placeholder visual — o QR real vem do serviço Node
         st.info(
-            f"Olá, {usuario['nome']}! "
+            f"Sessão deste usuário: `user_{usuario['id']}`. "
             "Quando o serviço Node estiver online, o QR aparece aqui."
         )
         # ENVIO REAL (descomente quando o Node estiver rodando):
@@ -9475,6 +9757,481 @@ def pagina_whatsapp(usuario: Dict[str, Any]) -> None:
 
 
 
+
+# ============================================================
+# FATURAMENTO (Autorização de Faturamento — impressão)
+# ============================================================
+#
+# Gera formulário alinhado ao PDF oficial.
+# Campos de data/assinatura/KM final ficam em branco para caneta.
+# PDF/HTML salvo no Storage (bucket manu_arquivos).
+# Veículo na troca: só texto por enquanto (sem tabela de estoque de troca).
+# ============================================================
+
+def carregar_dados_lead_para_faturamento(lead_id: int) -> dict:
+    query = text(
+        """
+        SELECT
+            l.id AS lead_id,
+            COALESCE(l.nome_completo, l.nome_lead) AS nome,
+            l.cpf AS cpf_cnpj,
+            l.endereco, l.bairro, l.cidade, l.cep, l.email, l.telefone,
+            l.carro_selecionado AS modelo,
+            l.ano_carro AS ano_modelo,
+            l.placa_carro AS placa,
+            l.valor_carro,
+            l.valor_entrada,
+            v.nome AS vendedor_nome
+        FROM public.leads l
+        LEFT JOIN public.vendedores v ON v.id = l.vendedor_id
+        WHERE l.id = :id
+        """
+    )
+    with engine.connect() as conn:
+        row = conn.execute(query, {"id": lead_id}).mappings().first()
+    return dict(row) if row else {}
+
+
+def html_autorizacao_faturamento(dados: dict) -> str:
+    """HTML pronto para impressão (Ctrl+P / salvar PDF)."""
+    def v(chave, padrao=""):
+        val = dados.get(chave)
+        if val is None or (isinstance(val, float) and str(val) == "nan"):
+            return padrao
+        return str(val)
+
+    def money(chave):
+        try:
+            n = float(dados.get(chave) or 0)
+            return f"{n:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        except Exception:
+            return "0,00"
+
+    return f"""
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<title>Autorização de Faturamento</title>
+<style>
+  @page {{ size: A4; margin: 12mm; }}
+  body {{ font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #111; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  td, th {{ border: 1px solid #333; padding: 4px 6px; vertical-align: top; }}
+  .noborder td {{ border: none; }}
+  .titulo {{ text-align: center; font-size: 16px; font-weight: bold; letter-spacing: 1px; }}
+  .secao {{ background: #eee; font-weight: bold; text-align: center; }}
+  .assinaturas {{ margin-top: 28px; }}
+  .assinaturas td {{ border: none; text-align: center; padding-top: 36px; }}
+  .linha {{ border-bottom: 1px solid #000; min-height: 18px; }}
+  @media print {{
+    .no-print {{ display: none !important; }}
+  }}
+</style>
+</head>
+<body>
+<table class="noborder" style="margin-bottom:8px">
+  <tr>
+    <td style="width:30%"><strong>manu automóveis</strong><br/>RLINE AUTOMÓVEIS LTDA</td>
+    <td class="titulo">AUTORIZAÇÃO DE FATURAMENTO</td>
+    <td style="width:30%; font-size:10px; text-align:right">
+      EST. INTENDENTE MAGALHÃES, 381<br/>
+      OSWALDO CRUZ - 21310-790<br/>
+      CNPJ: 59.548.124/0001-59<br/>
+      TEL: (21) 3283-7207
+    </td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td colspan="3"><b>NOME:</b> {v('nome')}</td>
+    <td colspan="2"><b>CPF/CNPJ:</b> {v('cpf_cnpj')}</td>
+  </tr>
+  <tr>
+    <td colspan="3"><b>ENDEREÇO:</b> {v('endereco')}</td>
+    <td colspan="2"><b>BAIRRO:</b> {v('bairro')}</td>
+  </tr>
+  <tr>
+    <td><b>CIDADE:</b> {v('cidade')}</td>
+    <td><b>CEP:</b> {v('cep')}</td>
+    <td><b>EMAIL:</b> {v('email')}</td>
+    <td colspan="2"><b>TELEFONE:</b> {v('telefone')}</td>
+  </tr>
+  <tr>
+    <td><b>MARCA</b><br/>{v('marca')}</td>
+    <td><b>MODELO</b><br/>{v('modelo')}</td>
+    <td><b>ANO/MODELO</b><br/>{v('ano_modelo')}</td>
+    <td><b>PLACA</b><br/>{v('placa')}</td>
+    <td><b>COR</b><br/>{v('cor')}</td>
+  </tr>
+  <tr>
+    <td colspan="5"><b>KILOMETRAGEM:</b> {v('kilometragem')}
+      &nbsp;&nbsp;&nbsp; <i>(preencher/atualizar a caneta se necessário)</i>
+    </td>
+  </tr>
+</table>
+
+<br/>
+<table>
+  <tr><td colspan="2" class="secao">I. NEGOCIAÇÃO</td></tr>
+  <tr>
+    <td style="width:50%">
+      <b>ENTRADA</b><br/>
+      DINHEIRO R$ {money('entrada_dinheiro')}<br/>
+      CARTÃO DE DÉBITO R$ {money('entrada_debito')}<br/>
+      CARTÃO DE CRÉDITO R$ {money('entrada_credito')}<br/>
+      TRANSFERÊNCIA/PIX/DEPÓSITO R$ {money('entrada_transferencia')}<br/>
+      BOLETO R$ {money('entrada_boleto')}<br/>
+      <b>TOTAL DA ENTRADA R$ {money('entrada_total')}</b>
+    </td>
+    <td style="width:50%">
+      <b>EM CASO DE VEÍCULO NA TROCA</b><br/>
+      MARCA/MODELO: {v('troca_marca_modelo')}<br/>
+      ANO/MODELO: {v('troca_ano_modelo')}<br/>
+      PLACA: {v('troca_placa')}<br/>
+      COR: {v('troca_cor')}<br/>
+      KM: {v('troca_km')}
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>FINANCIAMENTO</b> —
+      BANCO: {v('fin_banco')} &nbsp;
+      QUANT. DE PARCELAS: {v('fin_parcelas')} &nbsp;
+      VALOR DA PARCELA R$: {money('fin_valor_parcela')}
+    </td>
+  </tr>
+</table>
+
+<br/>
+<table>
+  <tr><td class="secao">II. OUTRAS OBSERVAÇÕES</td></tr>
+  <tr><td>
+    IPVA 2026 POR CONTA DA {"LOJA" if dados.get("ipva_conta_loja") else "CLIENTE"}<br/>
+    TRANSFERÊNCIA POR CONTA DO {"LOJA" if dados.get("transferencia_conta_loja") else "CLIENTE"}<br/>
+    GARANTIA DE MOTOR E CAIXA DE MARCHA POR 90 DIAS OU 3 MIL KM RODADOS
+    (KM A PARTIR DA SAÍDA DA LOJA)<br/>
+    FOI CEDIDO UM DESCONTO NO VALOR DE R$ {money('desconto_valor')}<br/>
+    {v('observacoes')}
+  </td></tr>
+</table>
+
+<p style="font-size:9px; margin-top:10px">
+Pelo presente instrumento e na melhor forma de direito a empresa declara, sob penas da lei,
+que foram realizadas todas as manutenções e revisões necessárias informadas no check list no veículo acima descrito.
+A empresa RLINE AUTOMÓVEIS LTDA informa ao comprador que se obriga contratualmente apenas com a
+GARANTIA DO MOTOR E DA CAIXA DE MARCHA do veículo adquirido...
+</p>
+
+<p><b>Rio de Janeiro,</b> ____ / ____ / ________
+&nbsp;&nbsp;&nbsp; <i>(preencher a caneta)</i></p>
+
+<table class="assinaturas">
+  <tr>
+    <td>_________________________<br/>VENDEDOR<br/>{v('vendedor_nome')}</td>
+    <td>_________________________<br/>GERENTE</td>
+    <td>_________________________<br/>CLIENTE</td>
+  </tr>
+</table>
+</body>
+</html>
+"""
+
+
+def salvar_faturamento_db(usuario: dict, dados: dict) -> int:
+    with engine.begin() as conn:
+        fid = conn.execute(
+            text(
+                """
+                INSERT INTO public.faturamentos (
+                    lead_id, criado_por_id, loja,
+                    nome, cpf_cnpj, endereco, bairro, cidade, cep, email, telefone,
+                    marca, modelo, ano_modelo, placa, cor, kilometragem,
+                    entrada_dinheiro, entrada_debito, entrada_credito,
+                    entrada_transferencia, entrada_boleto, entrada_total,
+                    troca_marca_modelo, troca_ano_modelo, troca_placa, troca_cor, troca_km,
+                    fin_banco, fin_parcelas, fin_valor_parcela,
+                    ipva_conta_loja, transferencia_conta_loja,
+                    desconto_valor, observacoes, status
+                ) VALUES (
+                    :lead_id, :criado_por_id, :loja,
+                    :nome, :cpf_cnpj, :endereco, :bairro, :cidade, :cep, :email, :telefone,
+                    :marca, :modelo, :ano_modelo, :placa, :cor, :kilometragem,
+                    :entrada_dinheiro, :entrada_debito, :entrada_credito,
+                    :entrada_transferencia, :entrada_boleto, :entrada_total,
+                    :troca_marca_modelo, :troca_ano_modelo, :troca_placa, :troca_cor, :troca_km,
+                    :fin_banco, :fin_parcelas, :fin_valor_parcela,
+                    :ipva_conta_loja, :transferencia_conta_loja,
+                    :desconto_valor, :observacoes, 'emitido'
+                )
+                RETURNING id
+                """
+            ),
+            {
+                "lead_id": dados.get("lead_id"),
+                "criado_por_id": usuario["id"],
+                "loja": normalizar_loja(usuario.get("loja", "381")),
+                "nome": dados.get("nome"),
+                "cpf_cnpj": dados.get("cpf_cnpj"),
+                "endereco": dados.get("endereco"),
+                "bairro": dados.get("bairro"),
+                "cidade": dados.get("cidade"),
+                "cep": dados.get("cep"),
+                "email": dados.get("email"),
+                "telefone": dados.get("telefone"),
+                "marca": dados.get("marca"),
+                "modelo": dados.get("modelo"),
+                "ano_modelo": dados.get("ano_modelo"),
+                "placa": dados.get("placa"),
+                "cor": dados.get("cor"),
+                "kilometragem": dados.get("kilometragem"),
+                "entrada_dinheiro": float(dados.get("entrada_dinheiro") or 0),
+                "entrada_debito": float(dados.get("entrada_debito") or 0),
+                "entrada_credito": float(dados.get("entrada_credito") or 0),
+                "entrada_transferencia": float(dados.get("entrada_transferencia") or 0),
+                "entrada_boleto": float(dados.get("entrada_boleto") or 0),
+                "entrada_total": float(dados.get("entrada_total") or 0),
+                "troca_marca_modelo": dados.get("troca_marca_modelo"),
+                "troca_ano_modelo": dados.get("troca_ano_modelo"),
+                "troca_placa": dados.get("troca_placa"),
+                "troca_cor": dados.get("troca_cor"),
+                "troca_km": dados.get("troca_km"),
+                "fin_banco": dados.get("fin_banco"),
+                "fin_parcelas": int(dados.get("fin_parcelas") or 0) or None,
+                "fin_valor_parcela": float(dados.get("fin_valor_parcela") or 0) or None,
+                "ipva_conta_loja": bool(dados.get("ipva_conta_loja", True)),
+                "transferencia_conta_loja": bool(dados.get("transferencia_conta_loja", True)),
+                "desconto_valor": float(dados.get("desconto_valor") or 0) or None,
+                "observacoes": dados.get("observacoes"),
+            },
+        ).scalar_one()
+    return int(fid)
+
+
+def pagina_faturamento(usuario: Dict[str, Any]) -> None:
+    if not usuario_tem("view_faturamento") and not usuario_e_gestor():
+        st.error("Sem permissão para faturamento.")
+        return
+
+    st.title("Faturamento")
+    st.caption(
+        "Autorização de Faturamento pronta para impressão. "
+        "Data, assinaturas e KM final podem ser completados a caneta. "
+        "Arquivo salvo em Storage → manu_arquivos (poucos KB)."
+    )
+
+    # Selecionar lead opcional para pré-preencher
+    lead_id_sel = None
+    try:
+        with engine.connect() as conn:
+            leads_df = pd.read_sql_query(
+                text(
+                    """
+                    SELECT id, COALESCE(nome_completo, nome_lead) AS nome,
+                           placa_carro, telefone
+                    FROM public.leads
+                    WHERE COALESCE(venda_concluida, FALSE) = TRUE
+                       OR COALESCE(vendeu, FALSE) = TRUE
+                       OR COALESCE(aprovou_credito, FALSE) = TRUE
+                    ORDER BY updated_at DESC NULLS LAST
+                    LIMIT 200
+                    """
+                ),
+                conn,
+            )
+    except Exception:
+        leads_df = pd.DataFrame()
+
+    pre = {}
+    if not leads_df.empty:
+        opcoes = [None] + leads_df["id"].tolist()
+        nomes = {None: "— preencher manualmente —"}
+        for _, r in leads_df.iterrows():
+            nomes[r["id"]] = f"#{r['id']} {r['nome']} · {r.get('placa_carro') or '-'}"
+        lead_id_sel = st.selectbox(
+            "Puxar dados de um lead",
+            options=opcoes,
+            format_func=lambda i: nomes.get(i, str(i)),
+        )
+        if lead_id_sel:
+            pre = carregar_dados_lead_para_faturamento(int(lead_id_sel))
+
+    with st.form("form_faturamento"):
+        st.subheader("Cliente")
+        c1, c2 = st.columns(2)
+        nome = c1.text_input("Nome*", value=str(pre.get("nome") or ""))
+        cpf = c2.text_input("CPF/CNPJ", value=str(pre.get("cpf_cnpj") or ""))
+        endereco = st.text_input("Endereço", value=str(pre.get("endereco") or ""))
+        b1, b2, b3 = st.columns(3)
+        bairro = b1.text_input("Bairro", value=str(pre.get("bairro") or ""))
+        cidade = b2.text_input("Cidade", value=str(pre.get("cidade") or ""))
+        cep = b3.text_input("CEP", value=str(pre.get("cep") or ""))
+        e1, e2 = st.columns(2)
+        email = e1.text_input("E-mail", value=str(pre.get("email") or ""))
+        telefone = e2.text_input("Telefone", value=str(pre.get("telefone") or ""))
+
+        st.subheader("Veículo")
+        v1, v2, v3 = st.columns(3)
+        marca = v1.text_input("Marca", value=str(pre.get("marca") or ""))
+        modelo = v2.text_input("Modelo", value=str(pre.get("modelo") or ""))
+        ano_modelo = v3.text_input("Ano/modelo", value=str(pre.get("ano_modelo") or ""))
+        v4, v5, v6 = st.columns(3)
+        placa = v4.text_input("Placa", value=str(pre.get("placa") or ""))
+        cor = v5.text_input("Cor", value=str(pre.get("cor") or ""))
+        km = v6.text_input("Kilometragem", value=str(pre.get("kilometragem") or ""))
+
+        st.subheader("I. Negociação — Entrada")
+        n1, n2, n3 = st.columns(3)
+        ent_din = n1.number_input("Dinheiro R$", min_value=0.0, step=100.0, value=float(pre.get("valor_entrada") or 0))
+        ent_deb = n2.number_input("Débito R$", min_value=0.0, step=100.0)
+        ent_cred = n3.number_input("Crédito R$", min_value=0.0, step=100.0)
+        n4, n5, n6 = st.columns(3)
+        ent_pix = n4.number_input("PIX/Transferência R$", min_value=0.0, step=100.0)
+        ent_bol = n5.number_input("Boleto R$", min_value=0.0, step=100.0)
+        ent_total = ent_din + ent_deb + ent_cred + ent_pix + ent_bol
+        n6.metric("Total entrada", f"R$ {ent_total:,.2f}")
+
+        st.subheader("Veículo na troca (opcional)")
+        t1, t2 = st.columns(2)
+        troca_mm = t1.text_input("Marca/Modelo troca")
+        troca_ano = t2.text_input("Ano/modelo troca")
+        t3, t4, t5 = st.columns(3)
+        troca_placa = t3.text_input("Placa troca")
+        troca_cor = t4.text_input("Cor troca")
+        troca_km = t5.text_input("KM troca")
+
+        st.subheader("Financiamento")
+        f1, f2, f3 = st.columns(3)
+        fin_banco = f1.text_input("Banco")
+        fin_parc = f2.number_input("Qtd. parcelas", min_value=0, step=1)
+        fin_val = f3.number_input("Valor parcela R$", min_value=0.0, step=50.0)
+
+        st.subheader("II. Outras observações")
+        ipva_loja = st.checkbox("IPVA 2026 por conta da loja", value=True)
+        transf_loja = st.checkbox("Transferência por conta da loja", value=True)
+        desconto = st.number_input("Desconto cedido R$", min_value=0.0, step=100.0)
+        obs = st.text_area("Observações extras")
+
+        gerar = st.form_submit_button(
+            "Salvar e gerar documento",
+            type="primary",
+            use_container_width=True,
+        )
+
+    if gerar:
+        if not nome.strip():
+            st.error("Nome do cliente é obrigatório.")
+            return
+        dados = {
+            "lead_id": int(lead_id_sel) if lead_id_sel else None,
+            "nome": nome.strip(),
+            "cpf_cnpj": cpf.strip() or None,
+            "endereco": endereco.strip() or None,
+            "bairro": bairro.strip() or None,
+            "cidade": cidade.strip() or None,
+            "cep": cep.strip() or None,
+            "email": email.strip() or None,
+            "telefone": telefone.strip() or None,
+            "marca": marca.strip() or None,
+            "modelo": modelo.strip() or None,
+            "ano_modelo": ano_modelo.strip() or None,
+            "placa": normalizar_placa(placa) or None,
+            "cor": cor.strip() or None,
+            "kilometragem": km.strip() or None,
+            "entrada_dinheiro": ent_din,
+            "entrada_debito": ent_deb,
+            "entrada_credito": ent_cred,
+            "entrada_transferencia": ent_pix,
+            "entrada_boleto": ent_bol,
+            "entrada_total": ent_total,
+            "troca_marca_modelo": troca_mm.strip() or None,
+            "troca_ano_modelo": troca_ano.strip() or None,
+            "troca_placa": troca_placa.strip() or None,
+            "troca_cor": troca_cor.strip() or None,
+            "troca_km": troca_km.strip() or None,
+            "fin_banco": fin_banco.strip() or None,
+            "fin_parcelas": fin_parc,
+            "fin_valor_parcela": fin_val,
+            "ipva_conta_loja": ipva_loja,
+            "transferencia_conta_loja": transf_loja,
+            "desconto_valor": desconto,
+            "observacoes": obs.strip() or None,
+            "vendedor_nome": usuario.get("nome") or "",
+        }
+        try:
+            fid = salvar_faturamento_db(usuario, dados)
+            html = html_autorizacao_faturamento(dados)
+            # sobe HTML no storage (leve, poucos KB)
+            caminho = caminho_storage_unico(f"faturamentos/{fid}", f"faturamento_{fid}.html")
+            path_ok = upload_para_storage(
+                STORAGE_BUCKET_ARQUIVOS,
+                caminho,
+                html.encode("utf-8"),
+                "text/html; charset=utf-8",
+            )
+            if path_ok:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text(
+                            """
+                            UPDATE public.faturamentos
+                            SET storage_bucket = :b, storage_path = :p, updated_at = NOW()
+                            WHERE id = :id
+                            """
+                        ),
+                        {"b": STORAGE_BUCKET_ARQUIVOS, "p": path_ok, "id": fid},
+                    )
+            st.success(f"Faturamento #{fid} salvo.")
+            st.session_state["faturamento_html_preview"] = html
+            st.session_state["faturamento_id_preview"] = fid
+        except Exception as erro:
+            st.error(
+                f"Erro ao salvar. Rode schema_auth_faturamento_realtime.sql. Detalhe: {erro}"
+            )
+
+    if st.session_state.get("faturamento_html_preview"):
+        st.subheader(
+            f"Pré-visualização — Faturamento #{st.session_state.get('faturamento_id_preview')}"
+        )
+        st.caption("Use Ctrl+P / Cmd+P para imprimir ou salvar PDF. Deixe data e assinaturas para caneta.")
+        __import__("streamlit.components.v1", fromlist=["html"]).html(
+            st.session_state["faturamento_html_preview"],
+            height=900,
+            scrolling=True,
+        )
+        st.download_button(
+            "Baixar HTML",
+            data=st.session_state["faturamento_html_preview"].encode("utf-8"),
+            file_name=f"faturamento_{st.session_state.get('faturamento_id_preview')}.html",
+            mime="text/html",
+        )
+
+    # Histórico recente
+    st.markdown("---")
+    st.subheader("Últimos faturamentos")
+    try:
+        with engine.connect() as conn:
+            hist = pd.read_sql_query(
+                text(
+                    """
+                    SELECT id, nome, placa, entrada_total, status, created_at
+                    FROM public.faturamentos
+                    ORDER BY created_at DESC
+                    LIMIT 30
+                    """
+                ),
+                conn,
+            )
+        if hist.empty:
+            st.info("Nenhum faturamento ainda.")
+        else:
+            st.dataframe(hist, use_container_width=True, hide_index=True)
+    except Exception as erro:
+        st.caption(f"Histórico indisponível até rodar o schema. ({erro})")
+
+
+
 # ============================================================
 # EXECUÇÃO PRINCIPAL
 # ============================================================
@@ -9517,6 +10274,9 @@ if usuario_tem("view_tasks"):
 if usuario_tem("view_goals"):
     paginas_permitidas.add("metas")
 
+if usuario_tem("view_faturamento") or usuario_e_gestor():
+    paginas_permitidas.add("faturamento")
+
 if usuario_e_gestor() or st.session_state.get("usuario_logado", {}).get("tipo") == "vendedor":
     paginas_permitidas.add("whatsapp")
 
@@ -9556,5 +10316,7 @@ elif pagina_atual == "tarefas":
     pagina_tarefas(usuario_atual)
 elif pagina_atual == "metas":
     pagina_metas(usuario_atual)
+elif pagina_atual == "faturamento":
+    pagina_faturamento(usuario_atual)
 elif pagina_atual == "whatsapp":
     pagina_whatsapp(usuario_atual)
