@@ -7615,7 +7615,7 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
                     )
                     b1, b2 = st.columns(2)
                     boleto_valor = b1.number_input(
-                        "Valor do boleto",
+                        "Valor da parcela do boleto",
                         min_value=0.0,
                         value=numero_seguro(ficha.get("boleto_valor")),
                         step=10.0,
