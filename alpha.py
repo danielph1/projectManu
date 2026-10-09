@@ -11422,7 +11422,6 @@ def _fallback_sem_api(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> 
             "Caminho simples: (1) 3 follow-ups em quem não respondeu, "
             "(2) 1 ligação em quem está aprovado, "
             "(3) uma mensagem boa por dia — qualidade > volume.\n\n"
-            "_Ative Gemini nos secrets pra eu ser suporte de verdade, não esse resumo seco._"
         )
 
     return (
