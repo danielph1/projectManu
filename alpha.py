@@ -358,6 +358,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "edit_own_credit_data",
         "view_oficina",
         "view_faturamento",
+        "view_ia_suporte",
     },
     # admin = poder global (todas as lojas)
     "admin": {
@@ -384,6 +385,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "view_oficina",
         "view_faturamento",
         "transfer_leads",
+        "view_ia_suporte",
     },
     "elfen_ai": {
         "view_leads",
@@ -399,6 +401,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "view_financial",
         "view_oficina",
         "view_faturamento",
+        "view_ia_suporte",
     },
     "financeiro": {
         "view_leads",
@@ -414,6 +417,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "view_credit_metrics",
         "view_oficina",
         "view_faturamento",
+        "view_ia_suporte",
     },
     "documentista": {
         "view_leads",
@@ -4360,6 +4364,18 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
                 type="primary" if pagina == "chat" else "secondary",
             ):
                 st.session_state["pagina_atual"] = "chat"
+                st.rerun()
+
+        # Manu Automóveis Suporte (IA)
+        if usuario_tem("view_ia_suporte") or usuario_e_gestor() or usuario.get("tipo") in {
+            "vendedor", "marketing", "elfen_ai", "financeiro", "documentista",
+        }:
+            if st.button(
+                "Suporte IA",
+                use_container_width=True,
+                type="primary" if pagina == "suporte_ia" else "secondary",
+            ):
+                st.session_state["pagina_atual"] = "suporte_ia"
                 st.rerun()
 
         if usuario_tem("view_goals"):
@@ -10982,6 +10998,277 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
         st.caption(f"Histórico indisponível até rodar o schema. ({erro})")
 
 
+
+# ============================================================
+# SUPORTE IA — Manu Automóveis Suporte
+# ============================================================
+#
+# Chat de ajuda para o usuário logado.
+# - Contexto do banco APENAS do próprio escopo (vendedor = só dele)
+# - Não modifica dados, não expõe outros vendedores
+# - Identidade: "Manu Automóveis Suporte"
+# - Se houver st.secrets["xai"]["api_key"] usa API Grok; senão responde
+#   com análise local dos números do usuário.
+# ============================================================
+
+def _contexto_usuario_para_ia(usuario: Dict[str, Any]) -> str:
+    """Monta texto com métricas e pendências só do escopo do usuário."""
+    linhas = [
+        f"Usuário: {usuario.get('nome')} | tipo: {usuario.get('tipo')} | loja: {usuario.get('loja')}",
+    ]
+    tipo = usuario.get("tipo")
+    try:
+        # Período: este mês
+        hoje = date.today()
+        di = hoje.replace(day=1)
+        metricas = obter_metricas(usuario, data_inicio=di, data_fim=hoje)
+        linhas.append(
+            f"Métricas deste mês (escopo do usuário): "
+            f"leads={metricas.get('total_leads', 0)}, "
+            f"responderam={metricas.get('total_responderam', 0)}, "
+            f"fichas={metricas.get('total_fichas', 0)}, "
+            f"aprovados={metricas.get('total_aprovados', 0)}, "
+            f"vendidos={metricas.get('total_vendidos', 0)}"
+        )
+    except Exception as erro:
+        linhas.append(f"(métricas indisponíveis: {erro})")
+
+    # Leads sem resposta (só do escopo)
+    try:
+        df = buscar_leads(
+            usuario, "nao_responderam", "", limite=15,
+            data_inicio=di, data_fim=hoje,
+        )
+        if not df.empty:
+            nomes = df.get("nome_lead", df.get("nome_completo", pd.Series())).head(8).tolist()
+            linhas.append(
+                f"Leads sem resposta recentes (amostra, só seus): {nomes}"
+            )
+            linhas.append(f"Total sem resposta no filtro: {len(df)}")
+    except Exception:
+        pass
+
+    # Tarefas pendentes do usuário
+    try:
+        tar = obter_tarefas(usuario)
+        if not tar.empty:
+            pend = tar[tar["resposta"].isna()] if "resposta" in tar.columns else tar
+            linhas.append(f"Tarefas visíveis: {len(tar)} | pendentes de resposta: {len(pend)}")
+    except Exception:
+        pass
+
+    if tipo == "vendedor":
+        linhas.append(
+            "REGRAS: este usuário é vendedor. Nunca mencione dados de outros vendedores. "
+            "Sugira ações práticas: follow-up WhatsApp, priorizar cliente na loja, "
+            "completar ficha, revisar negados."
+        )
+    elif tipo in {"admin", "gerente", "marketing"}:
+        linhas.append(
+            "Usuário gestor: pode falar de visão geral da loja/escopo dele, "
+            "sem inventar números fora do contexto fornecido."
+        )
+    else:
+        linhas.append(
+            "Responda só sobre o que for relevante ao perfil "
+            f"({tipo}): estoque, oficina, documentos, crédito, etc."
+        )
+
+    linhas.append(
+        "Você NÃO pode alterar banco de dados, código ou permissões. "
+        "Apenas orientar e responder perguntas."
+    )
+    return "\n".join(linhas)
+
+
+def _resposta_local_ia(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> str:
+    """Fallback sem API: dicas baseadas nos números do contexto."""
+    p = (pergunta or "").lower()
+    nome = usuario.get("nome") or "colega"
+
+    if any(x in p for x in ("quem é você", "quem e voce", "quem voce", "who are you")):
+        return (
+            "Sou **Manu Automóveis Suporte** — assistente interno de ajuda. "
+            "Posso analisar seus números (só do seu acesso) e sugerir próximos passos. "
+            "Não altero dados do sistema."
+        )
+
+    # extrai números do contexto se possível
+    leads = responderam = fichas = aprovados = vendidos = 0
+    for part in contexto.split(","):
+        part = part.strip()
+        if part.startswith("leads="):
+            try:
+                leads = int(part.split("=")[1])
+            except Exception:
+                pass
+        elif part.startswith("responderam="):
+            try:
+                responderam = int(part.split("=")[1])
+            except Exception:
+                pass
+        elif part.startswith("fichas="):
+            try:
+                fichas = int(part.split("=")[1])
+            except Exception:
+                pass
+        elif part.startswith("aprovados="):
+            try:
+                aprovados = int(part.split("=")[1])
+            except Exception:
+                pass
+        elif part.startswith("vendidos="):
+            try:
+                vendidos = int(part.split("=")[1])
+            except Exception:
+                pass
+
+    taxa_resp = (100 * responderam / leads) if leads else 0
+    taxa_ficha = (100 * fichas / leads) if leads else 0
+    taxa_venda = (100 * vendidos / leads) if leads else 0
+
+    dicas = []
+    if "melhor" in p or "melhorar" in p or "dica" in p or "ajuda" in p or "como" in p:
+        if leads and taxa_resp < 40:
+            dicas.append(
+                f"Sua taxa de resposta está em ~{taxa_resp:.0f}%. "
+                "Priorize os leads **sem resposta** com WhatsApp no mesmo dia "
+                "(mensagem curta + 2 horários de visita)."
+            )
+        if leads and taxa_ficha < 15 and responderam > 0:
+            dicas.append(
+                "Muita gente responde e pouca vira ficha. No atendimento, "
+                "peça CPF e interesse no carro cedo e marque **cliente na loja** "
+                "quando estiver presente — a ficha sobe na fila do crédito."
+            )
+        if fichas and aprovados == 0:
+            dicas.append(
+                "Há fichas sem aprovação ainda. Confirme se documentos e renda "
+                "estão completos; fale com o ElfenAI/crédito sobre pendências."
+            )
+        if aprovados and vendidos == 0:
+            dicas.append(
+                "Você tem aprovados sem compra. Foque em fechar entrada, "
+                "simular parcelas e agendar retorno com proposta pronta."
+            )
+        if not dicas:
+            dicas.append(
+                f"Neste mês: {leads} leads, {responderam} respostas, "
+                f"{fichas} fichas, {aprovados} aprovados, {vendidos} vendas "
+                f"(conv. lead→venda ~{taxa_venda:.1f}%). "
+                "Mantenha follow-up diário nos quentes e registre tudo no sistema."
+            )
+        return (
+            f"Olá, {nome}. Sou **Manu Automóveis Suporte**.\n\n"
+            + "\n\n".join(f"• {d}" for d in dicas)
+        )
+
+    return (
+        f"Sou **Manu Automóveis Suporte**. Vi seu contexto deste mês: "
+        f"{leads} leads, {responderam} responderam, {fichas} fichas, "
+        f"{aprovados} aprovados, {vendidos} vendas.\n\n"
+        "Pergunte por exemplo: *como posso melhorar?*, *o que priorizar hoje?*, "
+        "*como aumentar fichas?*. Não tenho acesso a dados de outros vendedores "
+        "e não altero o sistema — só oriento."
+    )
+
+
+def _chamar_xai_chat(mensagens: list, contexto: str) -> Optional[str]:
+    """Chama API xAI (Grok) se api_key estiver nos secrets."""
+    import json
+    import urllib.request
+    import urllib.error
+
+    try:
+        key = st.secrets.get("xai", {}).get("api_key") or st.secrets.get("XAI_API_KEY")
+    except Exception:
+        key = None
+    if not key:
+        return None
+
+    system = (
+        "Você é Manu Automóveis Suporte, assistente interno da loja de carros. "
+        "Quando perguntarem quem você é, responda exatamente que é Manu Automóveis Suporte. "
+        "Use APENAS o contexto de dados abaixo (já filtrado ao usuário). "
+        "Nunca invente dados de outros vendedores. "
+        "Nunca diga que pode alterar banco, código ou permissões. "
+        "Seja prático, curto e em português do Brasil.\n\n"
+        f"CONTEXTO DO USUÁRIO:\n{contexto}"
+    )
+    payload = {
+        "model": st.secrets.get("xai", {}).get("model", "grok-3"),
+        "messages": [{"role": "system", "content": system}] + mensagens,
+        "temperature": 0.5,
+    }
+    req = urllib.request.Request(
+        "https://api.x.ai/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data["choices"][0]["message"]["content"]
+    except Exception as erro:
+        return f"(API indisponível: {erro}. Usando modo local.)"
+
+
+def pagina_suporte_ia(usuario: Dict[str, Any]) -> None:
+    st.title("Manu Automóveis Suporte")
+    st.caption(
+        "Assistente de ajuda com base nos **seus** dados. "
+        "Não acessa outros vendedores e não altera o sistema."
+    )
+
+    if "ia_mensagens" not in st.session_state:
+        st.session_state["ia_mensagens"] = []
+
+    # Histórico
+    for msg in st.session_state["ia_mensagens"]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    pergunta = st.chat_input("Pergunte ao suporte…")
+    if pergunta:
+        st.session_state["ia_mensagens"].append(
+            {"role": "user", "content": pergunta}
+        )
+        with st.chat_message("user"):
+            st.markdown(pergunta)
+
+        with st.chat_message("assistant"):
+            # Indicador sutil de "digitando"
+            placeholder = st.empty()
+            placeholder.markdown("*Manu está digitando…*")
+
+            contexto = _contexto_usuario_para_ia(usuario)
+            historico_api = [
+                {"role": m["role"], "content": m["content"]}
+                for m in st.session_state["ia_mensagens"][-12:]
+            ]
+            resposta = _chamar_xai_chat(historico_api, contexto)
+            if not resposta or resposta.startswith("(API indisponível"):
+                local = _resposta_local_ia(pergunta, contexto, usuario)
+                if resposta and resposta.startswith("(API"):
+                    resposta = local + "\n\n" + resposta
+                else:
+                    resposta = local
+
+            placeholder.markdown(resposta)
+
+        st.session_state["ia_mensagens"].append(
+            {"role": "assistant", "content": resposta}
+        )
+
+    if st.button("Limpar conversa", key="ia_limpar"):
+        st.session_state["ia_mensagens"] = []
+        st.rerun()
+
+
 # ============================================================
 # EXECUÇÃO PRINCIPAL
 # ============================================================
@@ -11027,6 +11314,8 @@ if usuario_tem("view_goals"):
 if usuario_tem("view_faturamento") or usuario_e_gestor():
     paginas_permitidas.add("faturamento")
 
+paginas_permitidas.add("suporte_ia")
+
 if usuario_e_gestor() or st.session_state.get("usuario_logado", {}).get("tipo") == "vendedor":
     paginas_permitidas.add("whatsapp")
 
@@ -11068,5 +11357,7 @@ elif pagina_atual == "metas":
     pagina_metas(usuario_atual)
 elif pagina_atual == "faturamento":
     pagina_faturamento(usuario_atual)
+elif pagina_atual == "suporte_ia":
+    pagina_suporte_ia(usuario_atual)
 elif pagina_atual == "whatsapp":
     pagina_whatsapp(usuario_atual)
