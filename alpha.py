@@ -11408,7 +11408,7 @@ def _fallback_sem_api(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> 
         return (
             f"Sugestão de mensagem curta:\n\n"
             f"\"Oi, [nome]! Aqui é {nome} da Manu Automóveis. "
-            f"Separei uma condição no [carro] e queria te mostrar hoje ou amanhã "
+            f"Separei uma condição no [carro] e queria te mostrar!"
             f"— prefere manhã ou tarde?\"\n\n"
             f"Troca [nome]/[carro] pelo lead. "
             f"{amostra}\n\n"
@@ -11418,9 +11418,11 @@ def _fallback_sem_api(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> 
         return (
             f"{nome}, no que eu vejo agora: {met or 'sem métrica'}. "
             f"{amostra}\n\n"
-            "Caminho simples: (1) 3 follow-ups em quem não respondeu, "
+            "Caminho simples: (1) 5 follow-ups em quem não respondeu, "
             "(2) 1 ligação em quem está aprovado, "
-            "(3) uma mensagem boa por dia — qualidade > volume.\n\n"
+            "(3) uma mensagem boa por dia — qualidade > volume. "
+            "(4) analise os novos carros e veja se algum cliente antio se encaixa. "
+            "(5) ligue para aquele cliente de tempos que nao comprou ainda. \n\n"
         )
 
     return (
