@@ -11412,7 +11412,6 @@ def _fallback_sem_api(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> 
             f"— prefere manhã ou tarde?\"\n\n"
             f"Troca [nome]/[carro] pelo lead. "
             f"{amostra}\n\n"
-            f"_Modo básico sem API — com chave Gemini eu monto scripts bem mais afiados._"
         )
 
     if any(x in p for x in ("evoluir", "melhorar", "lead", "vender", "progresso")):
