@@ -781,6 +781,7 @@ def cadastrar_usuario_supabase(
     senha: str,
     tipo: str,
     loja: str,
+    telefone: str = "",
 ) -> tuple[bool, str]:
     """
     Cria conta no Supabase Auth + linha em public.usuarios.
@@ -834,6 +835,7 @@ def cadastrar_usuario_supabase(
         auth_uid = data.get("id")
 
     senha_hash = criar_hash_senha(senha)
+    telefone_n = (telefone or "").strip() or None
     try:
         with engine.begin() as conn:
             conn.execute(
@@ -841,11 +843,11 @@ def cadastrar_usuario_supabase(
                     """
                     INSERT INTO public.usuarios (
                         nome, login, senha_hash, tipo, loja,
-                        email, auth_user_id, ativo
+                        email, telefone, auth_user_id, ativo
                     )
                     VALUES (
                         :nome, :login, :senha_hash, :tipo, :loja,
-                        :email, :auth_user_id, TRUE
+                        :email, :telefone, :auth_user_id, TRUE
                     )
                     """
                 ),
@@ -856,6 +858,7 @@ def cadastrar_usuario_supabase(
                     "tipo": tipo_n,
                     "loja": loja_n,
                     "email": email,
+                    "telefone": telefone_n,
                     "auth_user_id": auth_uid,
                 },
             )
@@ -2520,8 +2523,11 @@ def obter_fichas_credito(
         filtro_periodo = f"({filtro_periodo}) AND f.created_at < :f_data_fim"
         parametros["f_data_fim"] = data_fim + timedelta(days=1)
 
-    ordem_fichas = (
-        """
+    # Ordem global:
+    # 1) pendente + cliente na loja (primeiro que chegou = topo)
+    # 2) demais pendentes (ordem de chegada)
+    # 3) aprovadas/negadas no fundo
+    ordem_fichas = """
         CASE
             WHEN f.status_geral = 'pendente'
                  AND COALESCE(l.cliente_na_loja, FALSE) = TRUE THEN 0
@@ -2530,10 +2536,7 @@ def obter_fichas_credito(
         END,
         f.created_at ASC NULLS LAST,
         f.id ASC
-        """
-        if usuario["tipo"] == "elfen_ai"
-        else "f.updated_at DESC, f.id DESC"
-    )
+    """
 
     query = text(
         f"""
@@ -4183,6 +4186,7 @@ def mostrar_login() -> None:
                         nome = st.text_input("Nome completo*")
                         login_c = st.text_input("Login* (sem espaços)")
                         email_c = st.text_input("E-mail*")
+                        telefone_c = st.text_input("Telefone*")
                         senha_c = st.text_input("Senha*", type="password")
                         tipo_c = st.selectbox("Perfil / tipo*", tipos_cadastro)
                         loja_c = st.selectbox("Loja*", list(LOJAS_DISPONIVEIS))
@@ -4193,7 +4197,8 @@ def mostrar_login() -> None:
                         )
                     if criar:
                         ok, msg = cadastrar_usuario_supabase(
-                            nome, login_c, email_c, senha_c, tipo_c, loja_c
+                            nome, login_c, email_c, senha_c, tipo_c, loja_c,
+                            telefone=telefone_c,
                         )
                         if ok:
                             st.success(msg)
@@ -6861,25 +6866,22 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
     ids_fichas = tuple(int(valor) for valor in fichas["id"].tolist())
     contagens_anexos = obter_contagem_anexos_fichas(ids_fichas)
 
-    grupo_elfen_anterior = None
+    grupo_anterior = None
     for _, ficha in fichas.iterrows():
-        if usuario["tipo"] == "elfen_ai":
-            esta_na_loja = ficha.get("cliente_na_loja")
-            esta_na_loja = (
-                bool(esta_na_loja)
-                if pd.notna(esta_na_loja)
-                else False
-            )
-            if ficha.get("status_geral") != "pendente":
-                grupo_elfen = "Analisadas — aprovadas ou negadas"
-            elif esta_na_loja:
-                grupo_elfen = "Pendentes — cliente na loja"
-            else:
-                grupo_elfen = "Pendentes — cliente fora da loja"
+        esta_na_loja = ficha.get("cliente_na_loja")
+        esta_na_loja = (
+            bool(esta_na_loja) if pd.notna(esta_na_loja) else False
+        )
+        if ficha.get("status_geral") != "pendente":
+            grupo = "Analisadas — aprovadas ou negadas"
+        elif esta_na_loja:
+            grupo = "Pendentes — cliente na loja 🏪"
+        else:
+            grupo = "Pendentes — cliente fora da loja"
 
-            if grupo_elfen != grupo_elfen_anterior:
-                st.subheader(grupo_elfen)
-                grupo_elfen_anterior = grupo_elfen
+        if grupo != grupo_anterior:
+            st.subheader(grupo)
+            grupo_anterior = grupo
 
         status_label = {
             "pendente": "⏳ Pendente",
@@ -6892,9 +6894,10 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
             or ficha.get("nome_lead")
             or "Cliente sem nome"
         )
+        badge_loja = "  🏪 Na loja" if esta_na_loja else ""
 
         with st.expander(
-            f"{status_label}  |  {nome_cliente}",
+            f"{status_label}{badge_loja}  |  {nome_cliente}",
             expanded=(
                 st.session_state.get("ficha_detalhe_id")
                 == int(ficha["id"])
@@ -9809,11 +9812,18 @@ def pagina_whatsapp(usuario: Dict[str, Any]) -> None:
 # Veículo na troca: só texto por enquanto (sem tabela de estoque de troca).
 # ============================================================
 
-def carregar_dados_lead_para_faturamento(lead_id: int) -> dict:
+
+def carregar_venda_para_faturamento(ficha_id: int) -> dict:
+    """
+    Faturamento puxa de FICHAS VENDIDAS (comprou = true), não de lead solto.
+    Ano/modelo, banco, financiado, boletos e entrada_total vêm da ficha/lead.
+    """
     query = text(
         """
         SELECT
-            l.id AS lead_id,
+            f.id AS ficha_id,
+            f.lead_id,
+            f.vendedor_id,
             COALESCE(l.nome_completo, l.nome_lead) AS nome,
             l.cpf AS cpf_cnpj,
             l.endereco, l.bairro, l.cidade, l.cep, l.email, l.telefone,
@@ -9821,20 +9831,76 @@ def carregar_dados_lead_para_faturamento(lead_id: int) -> dict:
             l.ano_carro AS ano_modelo,
             l.placa_carro AS placa,
             l.valor_carro,
-            l.valor_entrada,
+            f.valor_veiculo,
+            f.valor_financiado,
+            f.valor_liberado,
+            f.banco_contratado AS fin_banco,
+            f.entrada_total,
+            f.entrada_paga,
+            f.valor_pendente,
+            f.gerou_boleto,
+            f.boleto_valor,
+            f.boleto_meses,
+            f.boleto_total,
+            f.valor_entrada AS valor_entrada_ficha,
             v.nome AS vendedor_nome
-        FROM public.leads l
-        LEFT JOIN public.vendedores v ON v.id = l.vendedor_id
-        WHERE l.id = :id
+        FROM public.fichas_credito f
+        JOIN public.leads l ON l.id = f.lead_id
+        LEFT JOIN public.vendedores v ON v.id = f.vendedor_id
+        WHERE f.id = :id
+          AND COALESCE(f.comprou, FALSE) = TRUE
         """
     )
     with engine.connect() as conn:
-        row = conn.execute(query, {"id": lead_id}).mappings().first()
-    return dict(row) if row else {}
+        row = conn.execute(query, {"id": ficha_id}).mappings().first()
+    if not row:
+        return {}
+    dados = dict(row)
+    # Observação automática de boletos (editável 1x depois)
+    obs_boleto = ""
+    if dados.get("gerou_boleto") and dados.get("boleto_meses"):
+        try:
+            bv = float(dados.get("boleto_valor") or 0)
+            bm = int(dados.get("boleto_meses") or 0)
+            bt = float(dados.get("boleto_total") or (bv * bm))
+            obs_boleto = (
+                f"Observação: boleto de R$ {bt:,.2f}. "
+                f"{bm}x de R$ {bv:,.2f}."
+            ).replace(",", "X").replace(".", ",").replace("X", ".")
+        except Exception:
+            obs_boleto = ""
+    dados["observacoes"] = obs_boleto
+    dados["fin_parcelas"] = dados.get("boleto_meses")
+    dados["fin_valor_parcela"] = dados.get("boleto_valor")
+    return dados
+
+
+def listar_vendas_para_faturamento() -> pd.DataFrame:
+    query = text(
+        """
+        SELECT
+            f.id AS ficha_id,
+            COALESCE(l.nome_completo, l.nome_lead) AS nome,
+            l.placa_carro AS placa,
+            l.carro_selecionado AS carro,
+            l.ano_carro AS ano_modelo,
+            v.nome AS vendedor_nome,
+            f.data_compra,
+            f.entrada_total,
+            f.banco_contratado
+        FROM public.fichas_credito f
+        JOIN public.leads l ON l.id = f.lead_id
+        LEFT JOIN public.vendedores v ON v.id = f.vendedor_id
+        WHERE COALESCE(f.comprou, FALSE) = TRUE
+        ORDER BY f.data_compra DESC NULLS LAST, f.id DESC
+        LIMIT 300
+        """
+    )
+    with engine.connect() as conn:
+        return pd.read_sql_query(query, conn)
 
 
 def html_autorizacao_faturamento(dados: dict) -> str:
-    """HTML pronto para impressão (Ctrl+P / salvar PDF)."""
     def v(chave, padrao=""):
         val = dados.get(chave)
         if val is None or (isinstance(val, float) and str(val) == "nan"):
@@ -9864,10 +9930,7 @@ def html_autorizacao_faturamento(dados: dict) -> str:
   .secao {{ background: #eee; font-weight: bold; text-align: center; }}
   .assinaturas {{ margin-top: 28px; }}
   .assinaturas td {{ border: none; text-align: center; padding-top: 36px; }}
-  .linha {{ border-bottom: 1px solid #000; min-height: 18px; }}
-  @media print {{
-    .no-print {{ display: none !important; }}
-  }}
+  @media print {{ .no-print {{ display: none !important; }} }}
 </style>
 </head>
 <body>
@@ -9876,14 +9939,11 @@ def html_autorizacao_faturamento(dados: dict) -> str:
     <td style="width:30%"><strong>manu automóveis</strong><br/>RLINE AUTOMÓVEIS LTDA</td>
     <td class="titulo">AUTORIZAÇÃO DE FATURAMENTO</td>
     <td style="width:30%; font-size:10px; text-align:right">
-      EST. INTENDENTE MAGALHÃES, 381<br/>
-      OSWALDO CRUZ - 21310-790<br/>
-      CNPJ: 59.548.124/0001-59<br/>
-      TEL: (21) 3283-7207
+      EST. INTENDENTE MAGALHÃES, 381<br/>OSWALDO CRUZ - 21310-790<br/>
+      CNPJ: 59.548.124/0001-59<br/>TEL: (21) 3283-7207
     </td>
   </tr>
 </table>
-
 <table>
   <tr>
     <td colspan="3"><b>NOME:</b> {v('nome')}</td>
@@ -9908,11 +9968,9 @@ def html_autorizacao_faturamento(dados: dict) -> str:
   </tr>
   <tr>
     <td colspan="5"><b>KILOMETRAGEM:</b> {v('kilometragem')}
-      &nbsp;&nbsp;&nbsp; <i>(preencher/atualizar a caneta se necessário)</i>
-    </td>
+      &nbsp;&nbsp; <i>(completar a caneta se necessário)</i></td>
   </tr>
 </table>
-
 <br/>
 <table>
   <tr><td colspan="2" class="secao">I. NEGOCIAÇÃO</td></tr>
@@ -9941,10 +9999,10 @@ def html_autorizacao_faturamento(dados: dict) -> str:
       BANCO: {v('fin_banco')} &nbsp;
       QUANT. DE PARCELAS: {v('fin_parcelas')} &nbsp;
       VALOR DA PARCELA R$: {money('fin_valor_parcela')}
+      &nbsp;|&nbsp; VALOR FINANCIADO/LIBERADO R$: {money('valor_liberado')}
     </td>
   </tr>
 </table>
-
 <br/>
 <table>
   <tr><td class="secao">II. OUTRAS OBSERVAÇÕES</td></tr>
@@ -9957,17 +10015,10 @@ def html_autorizacao_faturamento(dados: dict) -> str:
     {v('observacoes')}
   </td></tr>
 </table>
-
 <p style="font-size:9px; margin-top:10px">
-Pelo presente instrumento e na melhor forma de direito a empresa declara, sob penas da lei,
-que foram realizadas todas as manutenções e revisões necessárias informadas no check list no veículo acima descrito.
-A empresa RLINE AUTOMÓVEIS LTDA informa ao comprador que se obriga contratualmente apenas com a
-GARANTIA DO MOTOR E DA CAIXA DE MARCHA do veículo adquirido...
+Pelo presente instrumento a empresa declara as condições de garantia do motor e caixa de marcha...
 </p>
-
-<p><b>Rio de Janeiro,</b> ____ / ____ / ________
-&nbsp;&nbsp;&nbsp; <i>(preencher a caneta)</i></p>
-
+<p><b>Rio de Janeiro,</b> ____ / ____ / ________ &nbsp; <i>(a caneta)</i></p>
 <table class="assinaturas">
   <tr>
     <td>_________________________<br/>VENDEDOR<br/>{v('vendedor_nome')}</td>
@@ -9986,7 +10037,7 @@ def salvar_faturamento_db(usuario: dict, dados: dict) -> int:
             text(
                 """
                 INSERT INTO public.faturamentos (
-                    lead_id, criado_por_id, loja,
+                    lead_id, ficha_id, criado_por_id, loja,
                     nome, cpf_cnpj, endereco, bairro, cidade, cep, email, telefone,
                     marca, modelo, ano_modelo, placa, cor, kilometragem,
                     entrada_dinheiro, entrada_debito, entrada_credito,
@@ -9994,9 +10045,10 @@ def salvar_faturamento_db(usuario: dict, dados: dict) -> int:
                     troca_marca_modelo, troca_ano_modelo, troca_placa, troca_cor, troca_km,
                     fin_banco, fin_parcelas, fin_valor_parcela,
                     ipva_conta_loja, transferencia_conta_loja,
-                    desconto_valor, observacoes, status
+                    desconto_valor, observacoes, obs_editada_uma_vez,
+                    vendedor_nome, status
                 ) VALUES (
-                    :lead_id, :criado_por_id, :loja,
+                    :lead_id, :ficha_id, :criado_por_id, :loja,
                     :nome, :cpf_cnpj, :endereco, :bairro, :cidade, :cep, :email, :telefone,
                     :marca, :modelo, :ano_modelo, :placa, :cor, :kilometragem,
                     :entrada_dinheiro, :entrada_debito, :entrada_credito,
@@ -10004,13 +10056,15 @@ def salvar_faturamento_db(usuario: dict, dados: dict) -> int:
                     :troca_marca_modelo, :troca_ano_modelo, :troca_placa, :troca_cor, :troca_km,
                     :fin_banco, :fin_parcelas, :fin_valor_parcela,
                     :ipva_conta_loja, :transferencia_conta_loja,
-                    :desconto_valor, :observacoes, 'emitido'
+                    :desconto_valor, :observacoes, FALSE,
+                    :vendedor_nome, 'emitido'
                 )
                 RETURNING id
                 """
             ),
             {
                 "lead_id": dados.get("lead_id"),
+                "ficha_id": dados.get("ficha_id"),
                 "criado_por_id": usuario["id"],
                 "loja": normalizar_loja(usuario.get("loja", "381")),
                 "nome": dados.get("nome"),
@@ -10045,6 +10099,7 @@ def salvar_faturamento_db(usuario: dict, dados: dict) -> int:
                 "transferencia_conta_loja": bool(dados.get("transferencia_conta_loja", True)),
                 "desconto_valor": float(dados.get("desconto_valor") or 0) or None,
                 "observacoes": dados.get("observacoes"),
+                "vendedor_nome": dados.get("vendedor_nome"),
             },
         ).scalar_one()
     return int(fid)
@@ -10057,81 +10112,87 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
 
     st.title("Faturamento")
     st.caption(
-        "Autorização de Faturamento pronta para impressão. "
-        "Data, assinaturas e KM final podem ser completados a caneta. "
-        "Arquivo salvo em Storage → manu_arquivos (poucos KB)."
+        "Puxa de **vendas** (ficha com cliente comprou). "
+        "Ano/modelo, banco, parcelas e total de entrada vêm da ficha. "
+        "Detalhe da entrada (dinheiro/pix/cartão) é preenchido na hora. "
+        "Data, assinatura e KM final: a caneta na impressão."
     )
 
-    # Selecionar lead opcional para pré-preencher
-    lead_id_sel = None
     try:
-        with engine.connect() as conn:
-            leads_df = pd.read_sql_query(
-                text(
-                    """
-                    SELECT id, COALESCE(nome_completo, nome_lead) AS nome,
-                           placa_carro, telefone
-                    FROM public.leads
-                    WHERE COALESCE(venda_concluida, FALSE) = TRUE
-                       OR COALESCE(vendeu, FALSE) = TRUE
-                       OR COALESCE(aprovou_credito, FALSE) = TRUE
-                    ORDER BY updated_at DESC NULLS LAST
-                    LIMIT 200
-                    """
-                ),
-                conn,
-            )
-    except Exception:
-        leads_df = pd.DataFrame()
+        vendas = listar_vendas_para_faturamento()
+    except Exception as erro:
+        st.error(f"Não foi possível listar vendas. Detalhe: {erro}")
+        vendas = pd.DataFrame()
 
-    pre = {}
-    if not leads_df.empty:
-        opcoes = [None] + leads_df["id"].tolist()
-        nomes = {None: "— preencher manualmente —"}
-        for _, r in leads_df.iterrows():
-            nomes[r["id"]] = f"#{r['id']} {r['nome']} · {r.get('placa_carro') or '-'}"
-        lead_id_sel = st.selectbox(
-            "Puxar dados de um lead",
+    pre: dict = {}
+    ficha_sel = None
+    if not vendas.empty:
+        opcoes = [None] + vendas["ficha_id"].tolist()
+        nomes = {None: "— escolha uma venda —"}
+        for _, r in vendas.iterrows():
+            nomes[r["ficha_id"]] = (
+                f"#{r['ficha_id']} {r['nome']} · {r.get('placa') or '-'} · "
+                f"{r.get('carro') or ''} {r.get('ano_modelo') or ''} · "
+                f"{r.get('vendedor_nome') or ''}"
+            )
+        ficha_sel = st.selectbox(
+            "Puxar dados de uma venda (ficha comprou)",
             options=opcoes,
             format_func=lambda i: nomes.get(i, str(i)),
         )
-        if lead_id_sel:
-            pre = carregar_dados_lead_para_faturamento(int(lead_id_sel))
+        if ficha_sel:
+            pre = carregar_venda_para_faturamento(int(ficha_sel))
+            if not pre:
+                st.warning("Venda não encontrada ou ainda não marcada como comprou.")
+    else:
+        st.info("Nenhuma venda (ficha com comprou=true) encontrada.")
+
+    # total entrada fixo da venda (não recalcula a partir dos pedaços até o usuário editar)
+    entrada_total_venda = float(pre.get("entrada_total") or 0)
 
     with st.form("form_faturamento"):
-        st.subheader("Cliente")
+        st.subheader("Cliente *")
         c1, c2 = st.columns(2)
         nome = c1.text_input("Nome*", value=str(pre.get("nome") or ""))
-        cpf = c2.text_input("CPF/CNPJ", value=str(pre.get("cpf_cnpj") or ""))
-        endereco = st.text_input("Endereço", value=str(pre.get("endereco") or ""))
+        cpf = c2.text_input("CPF/CNPJ*", value=str(pre.get("cpf_cnpj") or ""))
+        endereco = st.text_input("Endereço*", value=str(pre.get("endereco") or ""))
         b1, b2, b3 = st.columns(3)
-        bairro = b1.text_input("Bairro", value=str(pre.get("bairro") or ""))
-        cidade = b2.text_input("Cidade", value=str(pre.get("cidade") or ""))
-        cep = b3.text_input("CEP", value=str(pre.get("cep") or ""))
+        bairro = b1.text_input("Bairro*", value=str(pre.get("bairro") or ""))
+        cidade = b2.text_input("Cidade*", value=str(pre.get("cidade") or ""))
+        cep = b3.text_input("CEP*", value=str(pre.get("cep") or ""))
         e1, e2 = st.columns(2)
-        email = e1.text_input("E-mail", value=str(pre.get("email") or ""))
-        telefone = e2.text_input("Telefone", value=str(pre.get("telefone") or ""))
+        email = e1.text_input("E-mail*", value=str(pre.get("email") or ""))
+        telefone = e2.text_input("Telefone*", value=str(pre.get("telefone") or ""))
 
-        st.subheader("Veículo")
+        st.subheader("Veículo *")
         v1, v2, v3 = st.columns(3)
-        marca = v1.text_input("Marca", value=str(pre.get("marca") or ""))
-        modelo = v2.text_input("Modelo", value=str(pre.get("modelo") or ""))
-        ano_modelo = v3.text_input("Ano/modelo", value=str(pre.get("ano_modelo") or ""))
+        marca = v1.text_input("Marca*", value=str(pre.get("marca") or ""))
+        modelo = v2.text_input("Modelo*", value=str(pre.get("modelo") or ""))
+        # ANO/MODELO exatamente como na ficha/lead
+        ano_modelo = v3.text_input(
+            "Ano/modelo*",
+            value=str(pre.get("ano_modelo") or ""),
+            help="Exatamente como cadastrado (ex.: 2023/2024).",
+        )
         v4, v5, v6 = st.columns(3)
-        placa = v4.text_input("Placa", value=str(pre.get("placa") or ""))
-        cor = v5.text_input("Cor", value=str(pre.get("cor") or ""))
-        km = v6.text_input("Kilometragem", value=str(pre.get("kilometragem") or ""))
+        placa = v4.text_input("Placa*", value=str(pre.get("placa") or ""))
+        cor = v5.text_input("Cor*", value=str(pre.get("cor") or ""))
+        km = v6.text_input("Kilometragem*", value=str(pre.get("kilometragem") or ""))
 
-        st.subheader("I. Negociação — Entrada")
+        st.subheader("I. Negociação — Entrada (detalhe manual)")
+        st.caption(
+            f"Total da entrada na venda: **R$ {entrada_total_venda:,.2f}**. "
+            "Preencha como o cliente pagou (dinheiro, pix, cartão…). "
+            "A soma dos campos deve bater com o total."
+        )
         n1, n2, n3 = st.columns(3)
-        ent_din = n1.number_input("Dinheiro R$", min_value=0.0, step=100.0, value=float(pre.get("valor_entrada") or 0))
-        ent_deb = n2.number_input("Débito R$", min_value=0.0, step=100.0)
-        ent_cred = n3.number_input("Crédito R$", min_value=0.0, step=100.0)
+        ent_din = n1.number_input("Dinheiro R$", min_value=0.0, step=100.0, value=0.0)
+        ent_deb = n2.number_input("Débito R$", min_value=0.0, step=100.0, value=0.0)
+        ent_cred = n3.number_input("Crédito R$", min_value=0.0, step=100.0, value=0.0)
         n4, n5, n6 = st.columns(3)
-        ent_pix = n4.number_input("PIX/Transferência R$", min_value=0.0, step=100.0)
-        ent_bol = n5.number_input("Boleto R$", min_value=0.0, step=100.0)
-        ent_total = ent_din + ent_deb + ent_cred + ent_pix + ent_bol
-        n6.metric("Total entrada", f"R$ {ent_total:,.2f}")
+        ent_pix = n4.number_input("PIX/Transferência R$", min_value=0.0, step=100.0, value=0.0)
+        ent_bol = n5.number_input("Boleto (entrada) R$", min_value=0.0, step=100.0, value=0.0)
+        n6.metric("Total entrada (venda)", f"R$ {entrada_total_venda:,.2f}")
 
         st.subheader("Veículo na troca (opcional)")
         t1, t2 = st.columns(2)
@@ -10142,17 +10203,44 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
         troca_cor = t4.text_input("Cor troca")
         troca_km = t5.text_input("KM troca")
 
-        st.subheader("Financiamento")
+        st.subheader("Financiamento (da venda)")
         f1, f2, f3 = st.columns(3)
-        fin_banco = f1.text_input("Banco")
-        fin_parc = f2.number_input("Qtd. parcelas", min_value=0, step=1)
-        fin_val = f3.number_input("Valor parcela R$", min_value=0.0, step=50.0)
+        fin_banco = f1.text_input("Banco*", value=str(pre.get("fin_banco") or ""))
+        fin_parc = f2.number_input(
+            "Qtd. parcelas*",
+            min_value=0,
+            step=1,
+            value=int(pre.get("fin_parcelas") or pre.get("boleto_meses") or 0),
+        )
+        fin_val = f3.number_input(
+            "Valor parcela R$*",
+            min_value=0.0,
+            step=50.0,
+            value=float(pre.get("fin_valor_parcela") or pre.get("boleto_valor") or 0),
+        )
+        valor_lib = st.number_input(
+            "Valor liberado/financiado R$*",
+            min_value=0.0,
+            step=100.0,
+            value=float(pre.get("valor_liberado") or pre.get("valor_financiado") or 0),
+        )
 
         st.subheader("II. Outras observações")
         ipva_loja = st.checkbox("IPVA 2026 por conta da loja", value=True)
         transf_loja = st.checkbox("Transferência por conta da loja", value=True)
         desconto = st.number_input("Desconto cedido R$", min_value=0.0, step=100.0)
-        obs = st.text_area("Observações extras")
+        obs_default = str(pre.get("observacoes") or "")
+        obs = st.text_area(
+            "Observações extras (opcional — boletos já vêm pré-preenchidos; "
+            "depois de salvar só pode editar 1 vez)",
+            value=obs_default,
+        )
+
+        anexos_up = st.file_uploader(
+            "Anexos opcionais (comprovantes) — salvos no Storage",
+            type=["pdf", "png", "jpg", "jpeg", "webp"],
+            accept_multiple_files=True,
+        )
 
         gerar = st.form_submit_button(
             "Salvar e gerar documento",
@@ -10161,49 +10249,72 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
         )
 
     if gerar:
-        if not nome.strip():
-            st.error("Nome do cliente é obrigatório.")
+        obrigatorios = {
+            "Nome": nome,
+            "CPF/CNPJ": cpf,
+            "Endereço": endereco,
+            "Bairro": bairro,
+            "Cidade": cidade,
+            "CEP": cep,
+            "E-mail": email,
+            "Telefone": telefone,
+            "Marca": marca,
+            "Modelo": modelo,
+            "Ano/modelo": ano_modelo,
+            "Placa": placa,
+            "Cor": cor,
+            "Kilometragem": km,
+            "Banco": fin_banco,
+        }
+        faltando = [k for k, v in obrigatorios.items() if not str(v or "").strip()]
+        if faltando:
+            st.error("Campos obrigatórios faltando: " + ", ".join(faltando))
             return
+        if not ficha_sel:
+            st.error("Selecione uma venda (ficha comprou).")
+            return
+
         dados = {
-            "lead_id": int(lead_id_sel) if lead_id_sel else None,
+            "lead_id": pre.get("lead_id"),
+            "ficha_id": int(ficha_sel),
             "nome": nome.strip(),
-            "cpf_cnpj": cpf.strip() or None,
-            "endereco": endereco.strip() or None,
-            "bairro": bairro.strip() or None,
-            "cidade": cidade.strip() or None,
-            "cep": cep.strip() or None,
-            "email": email.strip() or None,
-            "telefone": telefone.strip() or None,
-            "marca": marca.strip() or None,
-            "modelo": modelo.strip() or None,
-            "ano_modelo": ano_modelo.strip() or None,
-            "placa": normalizar_placa(placa) or None,
-            "cor": cor.strip() or None,
-            "kilometragem": km.strip() or None,
+            "cpf_cnpj": cpf.strip(),
+            "endereco": endereco.strip(),
+            "bairro": bairro.strip(),
+            "cidade": cidade.strip(),
+            "cep": cep.strip(),
+            "email": email.strip(),
+            "telefone": telefone.strip(),
+            "marca": marca.strip(),
+            "modelo": modelo.strip(),
+            "ano_modelo": ano_modelo.strip(),
+            "placa": normalizar_placa(placa) or placa.strip(),
+            "cor": cor.strip(),
+            "kilometragem": km.strip(),
             "entrada_dinheiro": ent_din,
             "entrada_debito": ent_deb,
             "entrada_credito": ent_cred,
             "entrada_transferencia": ent_pix,
             "entrada_boleto": ent_bol,
-            "entrada_total": ent_total,
+            "entrada_total": entrada_total_venda,  # sempre o da venda
             "troca_marca_modelo": troca_mm.strip() or None,
             "troca_ano_modelo": troca_ano.strip() or None,
             "troca_placa": troca_placa.strip() or None,
             "troca_cor": troca_cor.strip() or None,
             "troca_km": troca_km.strip() or None,
-            "fin_banco": fin_banco.strip() or None,
+            "fin_banco": fin_banco.strip(),
             "fin_parcelas": fin_parc,
             "fin_valor_parcela": fin_val,
+            "valor_liberado": valor_lib,
             "ipva_conta_loja": ipva_loja,
             "transferencia_conta_loja": transf_loja,
             "desconto_valor": desconto,
             "observacoes": obs.strip() or None,
-            "vendedor_nome": usuario.get("nome") or "",
+            "vendedor_nome": pre.get("vendedor_nome") or usuario.get("nome") or "",
         }
         try:
             fid = salvar_faturamento_db(usuario, dados)
             html = html_autorizacao_faturamento(dados)
-            # sobe HTML no storage (leve, poucos KB)
             caminho = caminho_storage_unico(f"faturamentos/{fid}", f"faturamento_{fid}.html")
             path_ok = upload_para_storage(
                 STORAGE_BUCKET_ARQUIVOS,
@@ -10223,19 +10334,52 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
                         ),
                         {"b": STORAGE_BUCKET_ARQUIVOS, "p": path_ok, "id": fid},
                     )
+            # anexos opcionais
+            if anexos_up:
+                for arq in anexos_up:
+                    try:
+                        conteudo = arq.getvalue()
+                        nome_arq = arq.name or "anexo.bin"
+                        pth = caminho_storage_unico(f"faturamentos/{fid}/anexos", nome_arq)
+                        mime = arq.type or "application/octet-stream"
+                        ok_path = upload_para_storage(
+                            STORAGE_BUCKET_ARQUIVOS, pth, conteudo, mime
+                        )
+                        if ok_path:
+                            with engine.begin() as conn:
+                                conn.execute(
+                                    text(
+                                        """
+                                        INSERT INTO public.faturamento_anexos
+                                            (faturamento_id, storage_bucket, storage_path, nome_arquivo)
+                                        VALUES (:fid, :b, :p, :n)
+                                        """
+                                    ),
+                                    {
+                                        "fid": fid,
+                                        "b": STORAGE_BUCKET_ARQUIVOS,
+                                        "p": ok_path,
+                                        "n": nome_arq,
+                                    },
+                                )
+                    except Exception as err_an:
+                        st.warning(f"Anexo {getattr(arq,'name', '?')} falhou: {err_an}")
+
             st.success(f"Faturamento #{fid} salvo.")
             st.session_state["faturamento_html_preview"] = html
             st.session_state["faturamento_id_preview"] = fid
         except Exception as erro:
             st.error(
-                f"Erro ao salvar. Rode schema_auth_faturamento_realtime.sql. Detalhe: {erro}"
+                "Erro ao salvar. Rode o schema atualizado "
+                "(faturamentos + faturamento_anexos + obs_editada_uma_vez). "
+                f"Detalhe: {erro}"
             )
 
     if st.session_state.get("faturamento_html_preview"):
         st.subheader(
-            f"Pré-visualização — Faturamento #{st.session_state.get('faturamento_id_preview')}"
+            f"Pré-visualização — #{st.session_state.get('faturamento_id_preview')}"
         )
-        st.caption("Use Ctrl+P / Cmd+P para imprimir ou salvar PDF. Deixe data e assinaturas para caneta.")
+        st.caption("Ctrl+P / Cmd+P para imprimir. Documentista escolhe se inclui anexos.")
         __import__("streamlit.components.v1", fromlist=["html"]).html(
             st.session_state["faturamento_html_preview"],
             height=900,
@@ -10248,18 +10392,37 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
             mime="text/html",
         )
 
-    # Histórico recente
+    # ---- Histórico com filtros ----
     st.markdown("---")
-    st.subheader("Últimos faturamentos")
+    st.subheader("Histórico de faturamentos")
+    fc1, fc2, fc3 = st.columns(3)
+    f_nome = fc1.text_input("Filtro nome cliente", key="fat_f_nome")
+    f_vend = fc2.text_input("Filtro vendedor", key="fat_f_vend")
+    f_placa = fc3.text_input("Filtro placa", key="fat_f_placa")
+    fc4, fc5, fc6 = st.columns(3)
+    f_cpf = fc4.text_input("Filtro CPF/CNPJ", key="fat_f_cpf")
+    f_carro = fc5.text_input("Filtro carro/modelo", key="fat_f_carro")
+    f_entrada = fc6.text_input("Filtro entrada total (núm.)", key="fat_f_ent")
+
     try:
         with engine.connect() as conn:
             hist = pd.read_sql_query(
                 text(
                     """
-                    SELECT id, nome, placa, entrada_total, status, created_at
+                    SELECT
+                        id,
+                        vendedor_nome,
+                        nome,
+                        cpf_cnpj,
+                        placa,
+                        modelo,
+                        entrada_total,
+                        status,
+                        created_at,
+                        obs_editada_uma_vez
                     FROM public.faturamentos
                     ORDER BY created_at DESC
-                    LIMIT 30
+                    LIMIT 200
                     """
                 ),
                 conn,
@@ -10267,10 +10430,85 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
         if hist.empty:
             st.info("Nenhum faturamento ainda.")
         else:
-            st.dataframe(hist, use_container_width=True, hide_index=True)
+            if f_nome:
+                hist = hist[hist["nome"].fillna("").str.contains(f_nome, case=False, na=False)]
+            if f_vend:
+                hist = hist[hist["vendedor_nome"].fillna("").str.contains(f_vend, case=False, na=False)]
+            if f_placa:
+                hist = hist[hist["placa"].fillna("").str.contains(f_placa, case=False, na=False)]
+            if f_cpf:
+                hist = hist[hist["cpf_cnpj"].fillna("").str.contains(f_cpf, case=False, na=False)]
+            if f_carro:
+                hist = hist[hist["modelo"].fillna("").str.contains(f_carro, case=False, na=False)]
+            if f_entrada:
+                try:
+                    val = float(f_entrada.replace(",", "."))
+                    hist = hist[hist["entrada_total"].fillna(0).astype(float) == val]
+                except Exception:
+                    pass
+
+            st.dataframe(
+                hist.rename(columns={
+                    "vendedor_nome": "Vendedor",
+                    "nome": "Cliente",
+                    "cpf_cnpj": "CPF/CNPJ",
+                    "placa": "Placa",
+                    "modelo": "Carro",
+                    "entrada_total": "Entrada total",
+                    "status": "Status",
+                    "created_at": "Criado em",
+                    "obs_editada_uma_vez": "Obs já editada",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            # Edição única de observações / exclusão admin
+            ids = hist["id"].tolist() if not hist.empty else []
+            if ids:
+                sel = st.selectbox("Selecionar faturamento", ids, key="fat_sel_hist")
+                row = hist[hist["id"] == sel].iloc[0]
+                ja_editou = bool(row.get("obs_editada_uma_vez"))
+                if not ja_editou:
+                    nova_obs = st.text_area(
+                        "Editar observações (somente 1 vez)",
+                        key=f"fat_obs_edit_{sel}",
+                    )
+                    if st.button("Salvar observação (1x)", key=f"fat_obs_save_{sel}"):
+                        with engine.begin() as conn:
+                            conn.execute(
+                                text(
+                                    """
+                                    UPDATE public.faturamentos
+                                    SET observacoes = :o,
+                                        obs_editada_uma_vez = TRUE,
+                                        updated_at = NOW()
+                                    WHERE id = :id
+                                      AND COALESCE(obs_editada_uma_vez, FALSE) = FALSE
+                                    """
+                                ),
+                                {"o": nova_obs, "id": int(sel)},
+                            )
+                        st.success("Observação atualizada (não poderá editar de novo).")
+                        st.rerun()
+                else:
+                    st.caption("Observações deste faturamento já foram editadas uma vez.")
+
+                if usuario_e_gestor() or usuario.get("tipo") == "admin":
+                    if st.button("Apagar faturamento (só gerente/admin)", key=f"fat_del_{sel}"):
+                        with engine.begin() as conn:
+                            conn.execute(
+                                text("DELETE FROM public.faturamento_anexos WHERE faturamento_id = :id"),
+                                {"id": int(sel)},
+                            )
+                            conn.execute(
+                                text("DELETE FROM public.faturamentos WHERE id = :id"),
+                                {"id": int(sel)},
+                            )
+                        st.success("Faturamento apagado.")
+                        st.rerun()
     except Exception as erro:
         st.caption(f"Histórico indisponível até rodar o schema. ({erro})")
-
 
 
 # ============================================================
