@@ -10285,7 +10285,26 @@ def html_autorizacao_faturamento(dados: dict) -> str:
   </td></tr>
 </table>
 <p style="font-size:9px; margin-top:10px">
-Pelo presente instrumento a empresa declara as condições de garantia do motor e caixa de marcha...
+  Pelo presente instrumento e na melhor forma de direito a empresa declara, sob penas das lei, que foram realizadas todas as manutenções e
+    revisões necessárias informadas no check list no veículo acima descrito.
+          A empresa RLINE AUTOMOVEIS LTDA informa ao comprador que se obriga contratualmente apenas com a GARANTIA DO MOTOR E DA CAIXA
+          DE MARCHA do veículo adquirido, se desonerando dos demais itens, com a devida ciência do adquirente.
+                A empresa informa ao comprador que o mesmo tem por lei um prazo decadencial de 90 (noventa) dias ou 3.000 KM o que ocorrer primeiro,
+            para reclamar de vícios (defeitos) aparentes, na forma do artigo 26, inciso ii, do código de defesa do consumidor.
+                CIÊNCIA DO ADQUIRENTE - Na oportunidade, o comprador declara, sob as penas da lei, que está de acordo com o perfeito estado do veículo
+            adquirido, tendo sido testado todos os itens mencionados no CHECK LIST na presença do mesmo, nada tendo a reclamar. Cabe ressaltar ainda
+            que as peças que sofrem desgastes naturais em função do uso, deverão ser substituídas periodicamente de acordo com as especificações do
+            fabricante (embreagem, pastilhas de freio, vela de ignição, correias, amortecedores, suspensão, etc). Tais custos serão suportados pelo
+            comprador.
+                ATENÇÃO COMPRADOR: Perderá totalmente a garantia caso seja constatada qualquer uma das ocorrências abaixo relacionadas:
+            1) O veículo tenha sido submetido ao uso de forma inadequada, imprudente, negligente ou danificado por acidente.
+            2) Tenha sido instalado Kit-gás (GNV) alterando assim suas características originais de fabrica.
+            3) Tenha sido reparado em oficina diversa sem o conhecimento e consentimento da empresa (RLINE AUTOMÓVEIS LTDA).
+            4) Em caso de displicência ou inobservância de anormalidades como luz de óleo e luz de injeção eletrônica acesas no painel, bem como o
+            marcador de temperatura acima do nível e o comprador continuar andando até fundir o motor.
+            
+            NESTE ATO TOMO CIÊNCIA DO TEOR DO REFERIDO TERMO, QUE ME FOI LIDO E EXPLICADO DE FORMA CLARA E OBJETIVA, CONCORDANDO COM
+            TUDO, E AINDA DECLARO QUE ME FOI ENTREGUE UMA CÓPIA DO REFERIDO TERMO.
 </p>
 <p><b>Rio de Janeiro,</b> ____ / ____ / ________ &nbsp; <i>(a caneta)</i></p>
 <table class="assinaturas">
