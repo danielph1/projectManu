@@ -828,9 +828,9 @@ def pagina_dashboard(user: dict):
     k6.metric("Conv. lead→venda", f"{conv:.1f}%")
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Bruto vendas", f"R$ {fin['bruto_vendas']:,.0f}")
-    m2.metric("Pendente (boletos)", f"R$ {fin['pendente']:,.0f}")
-    m3.metric("Gasto oficina", f"R$ {fin['gasto_oficina']:,.0f}")
+    m1.metric("Bruto das vendas", f"R$ {fin['bruto_vendas']:,.0f}")
+    m2.metric("Pendente", f"R$ {fin['pendente']:,.0f}")
+    m3.metric("Gasto da oficina", f"R$ {fin['gasto_oficina']:,.0f}")
     m4.metric("Líquido ≈", f"R$ {fin['liquido_aprox']:,.0f}")
 
     st.markdown("---")
