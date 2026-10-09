@@ -11190,33 +11190,42 @@ CONTEXTO AO VIVO DO USUÁRIO (banco filtrado):
 
 
 def _chamar_gemini(mensagens: list, sistema: str) -> Tuple[Optional[str], Optional[str]]:
-    """Google Gemini (gratuito no AI Studio)."""
+    """Google Gemini — tenta vários modelos e refaz em caso de 503."""
     import json
     import urllib.request
     import urllib.error
+    import time as _time
 
     key = _secret_get("gemini", "api_key") or _secret_get("GEMINI_API_KEY")
     if not key:
         return None, "sem gemini api_key"
-    model = (
-        _secret_get("gemini", "model")
-        or "gemini-2.0-flash"
-    )
-    # Monta contents no formato Gemini (system à parte)
+
+    preferido = _secret_get("gemini", "model") or "gemini-3.8-flash"
+    candidatos = []
+    for m in (
+        preferido,
+        "gemini-3.8-flash",
+        "gemini-3.8-flash",
+        "gemini-flash-latest",
+        "gemini-2.0-flash-001",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash",
+    ):
+        if m and m not in candidatos:
+            candidatos.append(m)
+
     contents = []
     for m in mensagens:
         role = m.get("role") or "user"
-        # Gemini usa "user" | "model"
         grole = "model" if role == "assistant" else "user"
         contents.append({
             "role": grole,
             "parts": [{"text": m.get("content") or ""}],
         })
-    # Garante que a última é user
     if contents and contents[-1]["role"] != "user":
         contents.append({"role": "user", "parts": [{"text": "(continue)"}]})
 
-    payload = {
+    payload_base = {
         "systemInstruction": {"parts": [{"text": sistema}]},
         "contents": contents,
         "generationConfig": {
@@ -11224,36 +11233,52 @@ def _chamar_gemini(mensagens: list, sistema: str) -> Tuple[Optional[str], Option
             "maxOutputTokens": 1024,
         },
     }
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent?key={key}"
-    )
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        parts = (
-            data.get("candidates", [{}])[0]
-            .get("content", {})
-            .get("parts", [])
+
+    ultimo_erro = None
+    for model in candidatos:
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={key}"
         )
-        texto = "".join(p.get("text", "") for p in parts).strip()
-        if not texto:
-            return None, f"resposta vazia gemini: {str(data)[:180]}"
-        return texto, None
-    except urllib.error.HTTPError as e:
-        try:
-            body = e.read().decode("utf-8")[:250]
-        except Exception:
-            body = str(e)
-        return None, f"Gemini HTTP {e.code}: {body}"
-    except Exception as e:
-        return None, f"Gemini: {e}"
+        # até 2 tentativas por modelo (503 = sobrecarga temporária)
+        for tentativa in range(2):
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload_base).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=90) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                parts = (
+                    data.get("candidates", [{}])[0]
+                    .get("content", {})
+                    .get("parts", [])
+                )
+                texto = "".join(p.get("text", "") for p in parts).strip()
+                if texto:
+                    return texto, None
+                ultimo_erro = f"{model}: resposta vazia"
+                break
+            except urllib.error.HTTPError as e:
+                try:
+                    body = e.read().decode("utf-8")[:200]
+                except Exception:
+                    body = str(e)
+                ultimo_erro = f"{model} HTTP {e.code}"
+                if e.code == 503:
+                    # sobrecarga: espera e tenta de novo
+                    _time.sleep(1.2)
+                    continue
+                if e.code in (404, 400):
+                    break  # próximo modelo
+                # 403 / etc.
+                return None, f"{model} HTTP {e.code}: {body}"
+            except Exception as e:
+                ultimo_erro = f"{model}: {e}"
+                break
+    return None, ultimo_erro or "gemini falhou"
 
 
 def _chamar_xai(mensagens: list, sistema: str) -> Tuple[Optional[str], Optional[str]]:
@@ -11401,7 +11426,7 @@ def pagina_suporte_ia(usuario: Dict[str, Any]) -> None:
             "**IA completa desligada.** Nos Secrets do Streamlit coloque:\n\n"
             "[gemini]\n"
             "api_key = AIza...\n"
-            "model = gemini-2.0-flash\n\n"
+            "model = gemini-3.8-flash\n\n"
             "Chave grátis: https://aistudio.google.com/apikey — depois Reboot."
         )
     else:
@@ -11435,9 +11460,28 @@ def pagina_suporte_ia(usuario: Dict[str, Any]) -> None:
 
             resposta, erro = _chamar_xai_chat(hist, sistema)
             if not resposta:
-                resposta = _fallback_sem_api(pergunta, contexto, usuario)
-                if erro and tem_api:
-                    resposta += f"\n\n_ (falha API: {erro})_"
+                if tem_api and erro and (
+                    "503" in str(erro)
+                    or "UNAVAILABLE" in str(erro)
+                    or "high demand" in str(erro)
+                ):
+                    resposta = (
+                        f"A IA está com pico de uso agora (Google). "
+                        f"Espera uns 15 segundos e manda de novo — "
+                        f"eu continuo aqui, {usuario.get('nome') or 'colega'}."
+                    )
+                elif tem_api:
+                    resposta = _fallback_sem_api(pergunta, contexto, usuario)
+                    resposta = resposta.replace(
+                        "Sem a chave de IA nos secrets eu fico limitado e repetitivo — "
+                        "não é a experiência que a gente quer. Peça pro admin colocar:",
+                        "A API titubeou agora. Tenta de novo em instantes. Enquanto isso:",
+                    )
+                    curto = str(erro or "")[:90].replace(chr(10), " ")
+                    if curto:
+                        resposta += chr(10) + chr(10) + "_(detalhe: " + curto + ")_"
+                else:
+                    resposta = _fallback_sem_api(pergunta, contexto, usuario)
 
             ph.markdown(resposta)
 

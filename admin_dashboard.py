@@ -1095,7 +1095,18 @@ def _chamar_gemini_dash(mensagens: list, sistema: str):
     key = _dash_secret("gemini", "api_key") or _dash_secret("GEMINI_API_KEY")
     if not key:
         return None, "sem gemini"
-    model = _dash_secret("gemini", "model") or "gemini-2.0-flash"
+    preferido = _dash_secret("gemini", "model") or "gemini-3.8-flash"
+    candidatos = []
+    for m in (
+        preferido,
+        "gemini-3.8-flash",
+        "gemini-2.5-flash",
+        "gemini-flash-latest",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash",
+    ):
+        if m and m not in candidatos:
+            candidatos.append(m)
     contents = []
     for m in mensagens:
         role = m.get("role") or "user"
@@ -1103,35 +1114,44 @@ def _chamar_gemini_dash(mensagens: list, sistema: str):
         contents.append({"role": grole, "parts": [{"text": m.get("content") or ""}]})
     if contents and contents[-1]["role"] != "user":
         contents.append({"role": "user", "parts": [{"text": "(continue)"}]})
-    payload = {
+    payload_base = {
         "systemInstruction": {"parts": [{"text": sistema}]},
         "contents": contents,
         "generationConfig": {"temperature": 0.85, "maxOutputTokens": 1024},
     }
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent?key={key}"
-    )
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-        texto = "".join(p.get("text", "") for p in parts).strip()
-        return (texto or None), (None if texto else "vazio")
-    except urllib.error.HTTPError as e:
+    ultimo = None
+    for model in candidatos:
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={key}"
+        )
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload_base).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         try:
-            body = e.read().decode("utf-8")[:200]
-        except Exception:
-            body = str(e)
-        return None, f"Gemini {e.code}: {body}"
-    except Exception as e:
-        return None, str(e)
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+            texto = "".join(p.get("text", "") for p in parts).strip()
+            if texto:
+                return texto, None
+            ultimo = f"{model}: vazio"
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode("utf-8")[:180]
+            except Exception:
+                body = str(e)
+            ultimo = f"{model} {e.code}: {body}"
+            if e.code in (404, 400):
+                continue
+            return None, ultimo
+        except Exception as e:
+            ultimo = str(e)
+            continue
+    return None, ultimo
 
 
 def _chamar_xai_dash(mensagens: list, sistema: str):
