@@ -9869,7 +9869,7 @@ def pagina_whatsapp(usuario: Dict[str, Any]) -> None:
     )
 
     # ---- Sessão WhatsApp (QR) ----
-    with st.expander("📱 Minha sessão WhatsApp (QR Code)", expanded=False):
+    with st.expander("Minha sessão WhatsApp (QR Code)", expanded=False):
         st.markdown(
             """
             **Desktop:** suba o serviço `whatsapp_service` e clique em
