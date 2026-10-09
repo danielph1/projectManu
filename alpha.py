@@ -11382,7 +11382,7 @@ def _fallback_sem_api(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> 
         x in p
         for x in (
             "não estou bem", "nao estou legal", "mal", "triste", "ruim", "amigo",
-            "cansad", "ansied", "desabafo", "legal", "psicologico"
+            "cansad", "ansied", "desabafo", "psicologico"
         )
     ):
         return (
