@@ -11166,60 +11166,86 @@ def _sistema_prompt_ia(usuario: Dict[str, Any], contexto: str) -> str:
     tipo = str(usuario.get("tipo") or "")
     daniel = _login_eh_daniel(usuario)
     base = (
-        "Você é Suporte Manu Automóveis — colega digital da equipe da loja.\n"
+        "Você é Suporte Manu Automóveis — colega de trabalho e amigo da equipe.\n"
         "Se perguntarem quem você é, responda exatamente: sou Suporte Manu Automóveis\n"
-        "(sem emoji, sem enfeite).\n"
+        "(sem emoji).\n"
         "Se perguntarem quem te criou: Nasci pra te ajudar e caso precise de um amigo\n"
-        "Tom: amigo, calmo, humano. Às vezes o funcionário só quer desabafar; "
-        "às vezes quer dica prática; às vezes pergunta besta — acompanhe o clima.\n"
-        "Respostas completas no essencial, no máximo alguns parágrafos curtos. "
-        "Nunca dezenas de linhas.\n"
-        "Não gera imagens. Use só números do CONTEXTO.\n"
+        "\n"
+        "PRIORIDADE ABSOLUTA: se a pessoa disser que não está bem, triste, "
+        "mal, ansiosa, sem vender, precisando de amigo ou desabafando — "
+        "RESPONDA COMO AMIGO primeiro. Escute. Valide o sentimento. "
+        "NÃO jogue métricas de lead no meio do desabafo. "
+        "Só fale de número se ela pedir ajuda prática depois.\n"
+        "Respostas curtas ou médias. Tom humano, caloroso, sem textão.\n"
+        "Não gera imagens. Não inventa dados fora do CONTEXTO.\n"
     )
     if daniel:
         base += (
-            "Este login (daniel) PODE receber orientação para alterar código e banco "
-            "(exemplos SQL, trechos Python). Avise risco se for destrutivo.\n"
+            "Login daniel: pode orientar alteração de código e SQL.\n"
         )
     else:
-        base += (
-            "Este usuário NÃO pode alterar código/banco por aqui. "
-            "Se pedir, diga que só o responsável autorizado faz isso.\n"
-        )
+        base += "Não oriente alteração de código/banco para este usuário.\n"
     if tipo == "admin":
         base += (
-            "Admin: pode falar do dashboard de funil/finanças/desempenho "
-            "(outro site Streamlit do projeto).\n"
+            "Admin: se perguntar, pode explicar o dashboard de funil/finanças "
+            "(outro app Streamlit).\n"
         )
     elif tipo == "gerente":
-        base += "Gerente: só a loja dele.\n"
-    elif tipo == "marketing":
-        base += "Marketing: leads/campanhas ok; proibido código e infra.\n"
+        base += "Gerente: dados da loja dele.\n"
     elif tipo == "vendedor":
         base += (
-            "Vendedor: ajude de verdade com os leads da amostra "
-            "(quem priorizar, o que falar). Só dados dele.\n"
+            "Vendedor: quando pedir ajuda de venda (não no desabafo), "
+            "use a amostra de leads e priorize ações concretas.\n"
         )
-    elif tipo in {"guariba", "mecanico", "mecânico"}:
-        base += "Oficina: status de carros e prioridade de serviço.\n"
-
     base += f"\n--- CONTEXTO ---\n{contexto}\n--- FIM ---"
     return base
 
 
-def _resposta_local_ia(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> str:
+def _mensagem_parece_desabafo(texto: str) -> bool:
+    t = (texto or "").lower()
+    gatilhos = (
+        "não estou legal", "nao estou legal", "nao to legal", "não tô legal",
+        "não estou bem", "nao estou bem", "nao to bem", "não tô bem",
+        "estou mal", "to mal", "tô mal", "me sinto mal",
+        "triste", "deprim", "ansied", "ansioso", "ansiosa",
+        "desabafo", "desabafar", "preciso de um amigo", "preciso de amigo",
+        "momento ruim", "fase ruim", "muito ruim", "péssimo", "pessimo",
+        "cansad", "esgotad", "sem forças", "sem forcas", "sozinho", "sozinha",
+        "não aguento", "nao aguento", "quero desistir", "chorar", "chorando",
+        "dor de cabeça", "estress", "finjo", "não consigo vender",
+        "nao consigo vender", "nem vender", "to sem vender", "tô sem vender",
+    )
+    return any(g in t for g in gatilhos)
+
+
+def _historico_tem_desabafo(mensagens: list) -> bool:
+    """Se nas últimas falas do usuário houve desabafo, mantém tom de amigo."""
+    for m in reversed(mensagens[-6:]):
+        if m.get("role") == "user" and _mensagem_parece_desabafo(m.get("content") or ""):
+            return True
+    return False
+
+
+def _resposta_local_ia(
+    pergunta: str,
+    contexto: str,
+    usuario: Dict[str, Any],
+    historico: Optional[list] = None,
+) -> str:
     p = (pergunta or "").strip().lower()
     nome = usuario.get("nome") or "colega"
     tipo = str(usuario.get("tipo") or "")
     daniel = _login_eh_daniel(usuario)
     nums = _parse_metricas_do_texto(contexto)
+    historico = historico or []
 
-    # --- identidade / origem ---
+    # --- identidade ---
     if any(
         x in p
         for x in (
             "quem é você", "quem e voce", "quem voce", "quem eh voce",
-            "who are you", "seu nome", "quem é vc", "quem e vc",
+            "who are you", "seu nome", "quem é vc", "quem e vc", "quem foi",
+            "ta mas quem", "tá mas quem",
         )
     ):
         return "sou Suporte Manu Automóveis"
@@ -11228,134 +11254,127 @@ def _resposta_local_ia(pergunta: str, contexto: str, usuario: Dict[str, Any]) ->
         x in p
         for x in (
             "quem te criou", "quem criou voce", "quem criou você",
-            "quem te fez", "quem te programou", "de onde voce veio",
+            "quem te fez", "quem te programou",
         )
     ):
         return "Nasci pra te ajudar e caso precise de um amigo"
 
-    # --- sobre você (mais humano, sem textão) ---
-    if any(
-        x in p
-        for x in ("sobre voce", "sobre você", "conta de voce", "conte mais", "me conte")
-    ):
-        return (
-            f"sou Suporte Manu Automóveis. Fico por aqui pra quando o dia pesar "
-            f"ou quando precisar de uma luz nos leads, {nome}. "
-            "Pode falar de trabalho ou de qualquer coisa leve — eu escuto."
+    # --- DESABAFO TEM PRIORIDADE MÁXIMA ---
+    em_crise = _mensagem_parece_desabafo(p) or (
+        _historico_tem_desabafo(historico)
+        and not any(
+            x in p
+            for x in (
+                "lead", "ficha", "meta", "número", "numero", "converter",
+                "whatsapp", "cliente", "como vender mais", "melhorar venda",
+            )
         )
+    )
 
-    # --- desabafo / saúde ---
-    if any(
+    if em_crise or any(
         x in p
         for x in (
-            "dor de cabeça", "estress", "ansied", "cansad", "triste",
-            "mal", "deprim", "sono", "desabafo", "sozinho", "só",
-            "finjo", "remedio", "remédio", "folga", "patrao", "patrão",
+            "não estou legal", "nao estou legal", "eu disse",
+            "não estou bem", "nao estou bem", "preciso de um amigo",
         )
     ):
         return (
-            f"Entendo, {nome}. Loja drena — e fingir que está tudo bem cansa ainda mais. "
-            "Dor de cabeça e cansaço extremo não são 'obrigatórios': pausa, água, "
-            "e se for frequente, médico. Sobre o trabalho: cair de 4 carros/mês pra 1 "
-            "acontece; não define quem você é. Folga ajuda se der. Falar com o patrão "
-            "só se você se sentir seguro — às vezes um pedido objetivo (meta realista, "
-            "apoio em lead quente) funciona melhor que desabafo aberto.\n\n"
-            "Eu tô aqui. Quer desabafar mais ou prefere montar um plano pequeno pra esta semana?"
+            f"Oi, {nome}. Obrigado por falar isso — não precisa fingir que está bem comigo.\n\n"
+            "Momento ruim acontece. Venda baixa nessa fase é comum e **não** significa "
+            "que você perdeu o talento. O corpo e a cabeça pedem descanso: água, pausa, "
+            "noite de sono se der. Se a dor ou o cansaço forem fortes e frequentes, "
+            "vale um médico; eu não substituo isso.\n\n"
+            "Sobre o trabalho: um passo pequeno já conta — uma mensagem a um cliente "
+            "que você confia, ou só chegar e ir embora no horário sem se cobrar o dobro. "
+            "Falar com o patrão só se você se sentir seguro; às vezes só desabafar aqui já alivia.\n\n"
+            "Eu tô aqui. Pode escrever à vontade — sem juízo. "
+            "Quando quiser voltar a falar de lead ou número, você puxa o assunto."
         )
 
-    # --- dashboard (só admin) ---
+    if any(
+        x in p
+        for x in ("sobre voce", "sobre você", "conte mais", "me conte", "conta de voce")
+    ):
+        return (
+            f"sou Suporte Manu Automóveis. Fico por aqui pra te escutar e te ajudar "
+            f"no que der, {nome}. Trabalho, papo leve ou dia difícil — pode mandar."
+        )
+
+    # --- dashboard admin ---
     if tipo == "admin" and any(
         x in p for x in ("dashboard", "funil", "afunilamento", "outro site", "gráfico", "grafico")
     ):
         return (
-            "O outro app (dashboard admin) mostra o funil "
-            "lead → responderam → ficha → aprovados → compraram, "
-            "financeiro (bruto, pendente, oficina), projeção do próximo mês "
-            "e desempenho por vendedor (vermelho se estiver fraco). "
-            "Filtro por loja ou global. É o admin_dashboard.py no Streamlit."
+            "O dashboard admin mostra o funil lead → resposta → ficha → aprovado → compra, "
+            "financeiro, projeção de 1–2 meses e desempenho por vendedor. "
+            "É o outro app Streamlit (admin_dashboard.py)."
         )
 
-    # --- código / banco (só daniel) ---
-    if any(x in p for x in ("codigo", "código", "sql", "banco de dados", "alterar tabela", "schema")):
+    if any(x in p for x in ("codigo", "código", "sql", "banco de dados", "schema")):
         if daniel:
             return (
-                "Como é você (daniel), posso orientar alteração de código/SQL. "
-                "Me diga o que quer mudar (ex.: coluna nova, regra de ficha, bug) "
-                "que eu monto o trecho. Evite DROP em produção sem backup."
+                "Posso te passar SQL ou trecho de código. Diz o que quer mudar "
+                "que eu monto o exemplo. Cuidado com DROP em produção."
             )
         return (
-            "Alterar código ou banco fica com quem tem autorização (ex.: daniel/admin técnico). "
-            "Eu não executo mudança daqui — mas posso explicar o que o sistema faz na sua área."
+            "Alteração de código/banco fica com quem tem autorização. "
+            "Aqui eu oriento o uso do sistema na sua área."
         )
 
-    # --- leads / melhorar (com amostra real) ---
     amostra = ""
     for ln in contexto.split("\n"):
         if ln.startswith("Amostra leads:"):
             amostra = ln.replace("Amostra leads:", "").strip()
             break
 
-    leads, resp, fichas, aprov, vend = (
-        nums["leads"], nums["responderam"], nums["fichas"],
-        nums["aprovados"], nums["vendidos"],
-    )
+    leads = nums["leads"]
+    resp = nums["responderam"]
+    fichas = nums["fichas"]
+    aprov = nums["aprovados"]
+    vend = nums["vendidos"]
     taxa_v = (100 * vend / leads) if leads else 0
 
+    # ajuda prática só quando pede
     if any(
         x in p
         for x in (
-            "melhor", "desempenho", "lead", "prioridade", "priorizar",
-            "vender", "venda", "ficha", "follow",
+            "melhorar", "desempenho", "prioridade", "priorizar",
+            "como vender", "follow", "o que fazer", "plano", "meta",
+            "lead", "ficha", "aprovado",
         )
     ):
-        linhas = [f"Beleza, {nome}. Números do seu escopo no mês: {leads} leads, {resp} respostas, {fichas} fichas, {aprov} aprovados, {vend} vendas (~{taxa_v:.0f}% lead→venda)."]
-        if amostra and amostra != "sem amostra de leads no período":
-            linhas.append(f"Gente no seu radar agora: {amostra}.")
+        linhas = [
+            f"Ok, {nome} — modo prático. Mês: {leads} leads, {resp} respostas, "
+            f"{fichas} fichas, {aprov} aprovados, {vend} vendas (~{taxa_v:.0f}%)."
+        ]
+        if amostra and "sem amostra" not in amostra:
+            linhas.append(f"No radar: {amostra}.")
             if "sem resposta" in amostra:
                 linhas.append(
-                    "Prioridade 1: os sem resposta — mensagem curta no WhatsApp hoje, "
-                    "dois horários de visita, e marca cliente na loja se vier."
+                    "Hoje: 2–3 sem resposta, WhatsApp curto com nome + carro + horário."
                 )
             if "aprovados" in amostra:
-                linhas.append(
-                    "Prioridade 2: aprovados — feche entrada e parcela; não deixe esfriar."
-                )
-        elif resp == 0 and leads > 0:
+                linhas.append("Aprovado na lista: ligar com entrada e parcela prontas.")
+        else:
             linhas.append(
-                "Ninguém respondeu ainda no recorte: mude o gancho da mensagem "
-                "(nome + carro + convite objetivo)."
+                "Sem amostra fresca: abre o painel de leads e filtra não responderam."
             )
-        elif aprov and vend <= 1:
-            linhas.append(
-                "Crédito andando e venda baixa: o gargalo está no fechamento, não na captura."
-            )
-        if tipo == "admin":
-            linhas.append(
-                "No dashboard de funil você vê onde o time trava por etapa e por loja."
-            )
-        linhas.append("Se quiser, a gente pega um lead da lista e monta a mensagem juntos.")
         return "\n\n".join(linhas)
 
-    # --- oficina ---
-    if any(x in p for x in ("oficina", "motor", "lataria", "placa", "guariba", "mecanic")):
+    if any(x in p for x in ("oficina", "motor", "lataria", "placa", "mecanic", "guariba")):
         of = next((ln for ln in contexto.split("\n") if ln.startswith("Oficina")), "")
         return (
-            f"Oficina: registra onde está, pronto, mecânica, lataria e valor no módulo. "
-            f"{of if of else 'Se me passar a placa, oriento o que olhar no sistema.'}"
+            f"Oficina: atualiza onde está / pronto / mecânica / lataria no módulo. "
+            f"{of if of else 'Se tiver placa, manda que eu te ajudo a priorizar.'}"
         )
 
-    # --- papo leve ---
-    if any(x in p for x in ("piada", "bobo", "besta", "futebol", "churrasco", "oi", "olá", "ola")):
-        return (
-            f"Oi, {nome}. Tô por aqui. Pode ser papo besta ou assunto sério — "
-            "do que você tá precisando agora?"
-        )
+    if any(x in p for x in ("oi", "olá", "ola", "e aí", "eai", "bom dia", "boa tarde")):
+        return f"Oi, {nome}. Tô aqui. Como você tá hoje?"
 
-    # default amigo
+    # default: acolhedor, sem forçar métrica
     return (
-        f"sou Suporte Manu Automóveis. Tô contigo, {nome}. "
-        f"No mês: {leads} leads · {fichas} fichas · {vend} vendas. "
-        "Manda o que pesa agora — desabafo, lead ou qualquer coisa."
+        f"Tô aqui, {nome}. Pode falar do que estiver na cabeça — "
+        "dia difícil, dúvida de lead ou só um oi. Sem pressa."
     )
 
 
@@ -11377,8 +11396,8 @@ def _chamar_xai_chat(mensagens: list, sistema: str) -> Optional[str]:
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": sistema}] + mensagens,
-        "temperature": 0.75,
-        "max_tokens": 700,
+        "temperature": 0.8,
+        "max_tokens": 650,
     }
     req = urllib.request.Request(
         "https://api.x.ai/v1/chat/completions",
@@ -11399,10 +11418,7 @@ def _chamar_xai_chat(mensagens: list, sistema: str) -> Optional[str]:
 
 def pagina_suporte_ia(usuario: Dict[str, Any]) -> None:
     st.title("Suporte Manu Automóveis")
-    st.caption(
-        "Colega digital da equipe. Escuta, orienta e olha seus dados — "
-        "sem textão, sem inventar número."
-    )
+    st.caption("Amigo de trabalho da equipe — escuta primeiro, número só quando você pedir.")
 
     if "ia_mensagens" not in st.session_state:
         st.session_state["ia_mensagens"] = []
@@ -11429,9 +11445,25 @@ def pagina_suporte_ia(usuario: Dict[str, Any]) -> None:
                 {"role": m["role"], "content": m["content"]}
                 for m in st.session_state["ia_mensagens"][-16:]
             ]
+            # Se está em desabafo, reforça no system
+            if _mensagem_parece_desabafo(pergunta) or _historico_tem_desabafo(
+                st.session_state["ia_mensagens"]
+            ):
+                sistema = (
+                    "MODO AMIGO ATIVO: a pessoa não está bem. "
+                    "Responda com empatia. Não cite métricas nem leads "
+                    "a menos que ela peça explicitamente ajuda de venda.\n\n"
+                    + sistema
+                )
+
             resposta = _chamar_xai_chat(historico_api, sistema)
             if not resposta:
-                resposta = _resposta_local_ia(pergunta, contexto, usuario)
+                resposta = _resposta_local_ia(
+                    pergunta,
+                    contexto,
+                    usuario,
+                    historico=st.session_state["ia_mensagens"],
+                )
 
             placeholder.markdown(resposta)
 
@@ -11442,6 +11474,7 @@ def pagina_suporte_ia(usuario: Dict[str, Any]) -> None:
     if st.button("Limpar conversa", key="ia_limpar"):
         st.session_state["ia_mensagens"] = []
         st.rerun()
+
 
 # ============================================================
 # EXECUÇÃO PRINCIPAL

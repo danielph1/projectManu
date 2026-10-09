@@ -955,6 +955,8 @@ def pagina_dashboard(user: dict):
                 hide_index=True,
             )
 
+    secao_ia_especialista(loja, di, dfim)
+
     st.markdown("---")
     st.caption(
         "Manu Dashboard Admin · dados em tempo quase real (cache curto nas queries). "
@@ -965,6 +967,198 @@ def pagina_dashboard(user: dict):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# IA especialista (dashboard) — funil, finanças, previsão 1–2 meses
+# ---------------------------------------------------------------------------
+
+def _contexto_dashboard_ia(loja: str, di: date, dfim: date) -> str:
+    funil = funil_conversao(loja, di, dfim)
+    fin = financeiro_periodo(loja, di, dfim)
+    serie = serie_mensal(loja, meses=6)
+    pb = projetar_proximo_mes(serie, "bruto")
+    pl = projetar_proximo_mes(serie, "leads")
+    pc = projetar_proximo_mes(serie, "compraram")
+    # projeção 2 meses: aplica tendência de novo
+    proj2_bruto = max(0, pb["projecao"] + 0.35 * pb.get("tendencia", 0))
+    proj2_leads = max(0, pl["projecao"] + 0.35 * pl.get("tendencia", 0))
+    proj2_comp = max(0, pc["projecao"] + 0.35 * pc.get("tendencia", 0))
+
+    linhas = [
+        f"Escopo loja={loja} período={di} a {dfim}",
+        f"Funil: leads={funil['leads']}, responderam={funil['responderam']}, "
+        f"fichas={funil['fichas']}, aprovados={funil['aprovados']}, compraram={funil['compraram']}",
+        f"Finanças: bruto={fin['bruto_vendas']:.0f}, liberado={fin['liberado']:.0f}, "
+        f"entrada={fin['entrada_paga']:.0f}, pendente={fin['pendente']:.0f}, "
+        f"oficina={fin['gasto_oficina']:.0f}, liquido≈{fin['liquido_aprox']:.0f}",
+        f"Projeção próximo mês: bruto≈{pb['projecao']:.0f}, leads≈{pl['projecao']:.0f}, "
+        f"compras≈{pc['projecao']:.0f}",
+        f"Projeção ~2 meses à frente: bruto≈{proj2_bruto:.0f}, leads≈{proj2_leads:.0f}, "
+        f"compras≈{proj2_comp:.0f}",
+        f"Série mensal (label|leads|compraram|bruto): "
+        + " ; ".join(
+            f"{r['label']}|{r['leads']}|{r['compraram']}|{r['bruto']:.0f}"
+            for _, r in serie.iterrows()
+        ),
+    ]
+    try:
+        dv = desempenho_vendedores(loja, di, dfim)
+        if not dv.empty:
+            top = dv.head(5)
+            weak = dv[dv["status"] == "ruim"].head(5)
+            linhas.append(
+                "Top vendedores (nome|leads|vendas|conv%): "
+                + " ; ".join(
+                    f"{r['nome']}|{r['leads']}|{r['compraram']}|{100*r['conv_lead_venda']:.0f}%"
+                    for _, r in top.iterrows()
+                )
+            )
+            if not weak.empty:
+                linhas.append(
+                    "Atenção (desempenho fraco): "
+                    + ", ".join(weak["nome"].tolist())
+                )
+    except Exception as e:
+        linhas.append(f"(vendedores: {e})")
+    return "\n".join(linhas)
+
+
+def _resposta_especialista_local(pergunta: str, contexto: str) -> str:
+    p = (pergunta or "").lower()
+    if any(x in p for x in ("quem é você", "quem e voce", "quem voce", "quem eh")):
+        return "sou Suporte Manu Automóveis — especialista em funil, finanças e previsão deste dashboard"
+    if any(x in p for x in ("quem te criou", "quem criou")):
+        return "Nasci pra te ajudar e caso precise de um amigo"
+
+    # extrai números do contexto
+    def grab(tag: str) -> str:
+        for ln in contexto.split("\n"):
+            if ln.startswith(tag):
+                return ln
+        return ""
+
+    funil = grab("Funil:")
+    fin = grab("Finanças:")
+    p1 = grab("Projeção próximo mês:")
+    p2 = grab("Projeção ~2 meses")
+
+    if any(x in p for x in ("previs", "projec", "próximo mês", "proximo mes", "2 meses", "dois meses")):
+        return (
+            f"{p1}\n\n{p2}\n\n"
+            "Método: média dos últimos 1–3 meses + parte da tendência. "
+            "É ordem de grandeza, não garantia. "
+            "Se o funil travar em resposta ou ficha, a projeção de compra cai junto."
+        )
+    if any(x in p for x in ("funil", "convers", "afunil")):
+        return (
+            f"{funil}\n\n"
+            "Leia de cima pra baixo: onde a conta cai mais (lead→resposta, "
+            "resposta→ficha, ficha→aprovado, aprovado→compra) é o gargalo da semana."
+        )
+    if any(x in p for x in ("finance", "bruto", "pendente", "lucro", "oficina", "dinheiro")):
+        return (
+            f"{fin}\n\n"
+            "Bruto ≈ liberado + entrada paga. Líquido ≈ bruto − oficina. "
+            "Pendente alto = boleto a receber — cobranca e previsao de caixa."
+        )
+    if any(x in p for x in ("vendedor", "desempenho", "ruim", "time")):
+        attn = grab("Atenção")
+        top = grab("Top vendedores")
+        return (
+            f"{top}\n{attn}\n\n"
+            "Quem está vermelho precisa de coaching ou redistribuição de lead; "
+            "quem converte bem pode receber mais volume quente."
+        )
+    return (
+        f"Dados do filtro atual:\n{funil}\n{fin}\n{p1}\n{p2}\n\n"
+        "Pergunte por funil, gargalo, caixa, pendente, previsão de 1 ou 2 meses "
+        "ou desempenho de vendedor."
+    )
+
+
+def _chamar_xai_dash(mensagens: list, sistema: str) -> Optional[str]:
+    import json
+    import urllib.request
+    try:
+        xai = st.secrets.get("xai", {})
+        key = xai.get("api_key") if hasattr(xai, "get") else None
+        if not key:
+            key = st.secrets.get("XAI_API_KEY")
+        model = (xai.get("model") if hasattr(xai, "get") else None) or "grok-3"
+    except Exception:
+        return None
+    if not key:
+        return None
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": sistema}] + mensagens,
+        "temperature": 0.5,
+        "max_tokens": 700,
+    }
+    req = urllib.request.Request(
+        "https://api.x.ai/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=75) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data["choices"][0]["message"]["content"]
+    except Exception:
+        return None
+
+
+def secao_ia_especialista(loja: str, di: date, dfim: date) -> None:
+    st.markdown("---")
+    st.subheader("Suporte especialista (funil · finanças · previsão)")
+    st.caption(
+        "sou Suporte Manu Automóveis neste dashboard — usa os números do filtro atual "
+        "(loja/período). Previsão de 1 e 2 meses com base na série recente."
+    )
+    if "dash_ia_msgs" not in st.session_state:
+        st.session_state["dash_ia_msgs"] = []
+
+    for msg in st.session_state["dash_ia_msgs"]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    q = st.chat_input("Pergunte sobre funil, caixa, previsão…", key="dash_ia_input")
+    if q:
+        st.session_state["dash_ia_msgs"].append({"role": "user", "content": q})
+        with st.chat_message("user"):
+            st.markdown(q)
+        with st.chat_message("assistant"):
+            ph = st.empty()
+            ph.markdown("*digitando…*")
+            ctx = _contexto_dashboard_ia(loja, di, dfim)
+            sistema = (
+                "Você é Suporte Manu Automóveis, especialista em funil de vendas, "
+                "finanças de concessionária e previsões de curto prazo (1–2 meses).\n"
+                "Se perguntarem quem é: sou Suporte Manu Automóveis\n"
+                "Se perguntarem quem criou: Nasci pra te ajudar e caso precise de um amigo\n"
+                "Use APENAS o contexto numérico abaixo. Respostas claras, médias, sem textão.\n"
+                "Explique gargalos do funil, caixa (bruto/pendente/oficina) e projeções.\n"
+                f"\n--- DADOS ---\n{ctx}\n--- FIM ---"
+            )
+            hist = [
+                {"role": m["role"], "content": m["content"]}
+                for m in st.session_state["dash_ia_msgs"][-12:]
+            ]
+            ans = _chamar_xai_dash(hist, sistema)
+            if not ans:
+                ans = _resposta_especialista_local(q, ctx)
+            ph.markdown(ans)
+        st.session_state["dash_ia_msgs"].append({"role": "assistant", "content": ans})
+
+    if st.button("Limpar chat especialista", key="dash_ia_clear"):
+        st.session_state["dash_ia_msgs"] = []
+        st.rerun()
+
+
 def main():
     st.markdown(
         f"""
