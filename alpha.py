@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import secrets
 from datetime import date, timedelta
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 from extra_streamlit_components import CookieManager
 import time
 import pandas as pd
@@ -241,6 +241,10 @@ st.markdown(
     .vendedor-card h4 {{ margin: 0 0 6px 0; color: var(--cor-texto); }}
     .vendedor-card .muted {{ color: var(--cor-texto-muted); font-size: 0.85rem; }}
     </style>
+    <link rel="manifest" href="data:application/json,{{%22name%22:%22Manu%20Automoveis%22,%22short_name%22:%22Manu%22,%22display%22:%22standalone%22,%22start_url%22:%22/%22,%22background_color%22:%22%230b0f14%22,%22theme_color%22:%22%233b82f6%22}}">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Manu">
     """,
     unsafe_allow_html=True,
 )
@@ -291,12 +295,34 @@ ROLE_ALIASES = {
     "mecânico": "mecanico",
 }
 
-LOJAS_DISPONIVEIS = ("381", "746", "NINA")
+LOJAS_DISPONIVEIS = ("381", "746", "764", "NINA")
 
 
 def normalizar_loja(loja: Any) -> str:
-    valor = str(loja or "381").strip().upper()
-    return valor if valor in LOJAS_DISPONIVEIS else "381"
+    """
+    Aceita 381, 746, 764, NINA e qualquer código numérico do banco.
+    Só cai em 381 se vier vazio/nulo — NÃO sobrescreve 764 por estar
+    fora da lista antiga.
+    """
+    if loja is None:
+        return "381"
+    try:
+        if pd.isna(loja):
+            return "381"
+    except (TypeError, ValueError):
+        pass
+    valor = str(loja).strip().upper()
+    if not valor or valor in {"NONE", "NAN", "NULL"}:
+        return "381"
+    # Aliases comuns
+    if valor in {"764", "746"}:
+        return valor  # mantém o que está no banco
+    if valor in LOJAS_DISPONIVEIS:
+        return valor
+    # Código numérico desconhecido: preserva (não força 381)
+    if valor.isdigit():
+        return valor
+    return valor
 
 
 def gerar_link_whatsapp(telefone: Any) -> Optional[str]:
@@ -1988,6 +2014,16 @@ def criar_notificacao_vendedor(
             "ficha_id": ficha_id,
         },
     )
+
+    # Web Push (app fechado) — falha silenciosa se não configurado
+    try:
+        enviar_push_web(
+            str(titulo or "Manu"),
+            str(mensagem or "")[:180],
+            usuario_ids=[int(usuario["id"])],
+        )
+    except Exception:
+        pass
 
 
 def criar_notificacao_nova_ficha(
@@ -4305,6 +4341,8 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
 
         if st.button("Sair", use_container_width=True, key="btn_sair_app"):
             limpar_sessao()
+
+        bloco_ativar_notificacoes_push(usuario)
 
         st.markdown("---")
         st.header("Navegação")
@@ -10144,9 +10182,38 @@ def carregar_venda_para_faturamento(ficha_id: int) -> dict:
     return dados
 
 
-def listar_vendas_para_faturamento() -> pd.DataFrame:
+def listar_vendas_para_faturamento(usuario: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+    """
+    Vendas (comprou) disponíveis para faturar.
+    Vendedor: SOMENTE as próprias (vendedor_id).
+    Gerente: loja dele.
+    Admin/marketing: todas.
+    """
+    filtros = ["COALESCE(f.comprou, FALSE) = TRUE"]
+    params: Dict[str, Any] = {}
+    if usuario:
+        tipo = str(usuario.get("tipo") or "")
+        if tipo == "vendedor":
+            vid = usuario.get("vendedor_id")
+            if not vid:
+                return pd.DataFrame()
+            filtros.append("f.vendedor_id = :vid")
+            params["vid"] = int(vid)
+        elif tipo == "gerente":
+            loja = normalizar_loja(usuario.get("loja"))
+            filtros.append(
+                """
+                f.vendedor_id IN (
+                    SELECT v2.id FROM public.vendedores v2
+                    WHERE UPPER(COALESCE(v2.loja, '381')) = UPPER(:loja)
+                )
+                """
+            )
+            params["loja"] = loja
+        # admin / marketing / outros com permissão: sem filtro extra
+    where = " AND ".join(filtros)
     query = text(
-        """
+        f"""
         SELECT
             f.id AS ficha_id,
             COALESCE(l.nome_completo, l.nome_lead) AS nome,
@@ -10156,17 +10223,18 @@ def listar_vendas_para_faturamento() -> pd.DataFrame:
             v.nome AS vendedor_nome,
             f.data_compra,
             f.entrada_total,
-            f.banco_contratado
+            f.banco_contratado,
+            f.vendedor_id
         FROM public.fichas_credito f
         JOIN public.leads l ON l.id = f.lead_id
         LEFT JOIN public.vendedores v ON v.id = f.vendedor_id
-        WHERE COALESCE(f.comprou, FALSE) = TRUE
+        WHERE {where}
         ORDER BY f.data_compra DESC NULLS LAST, f.id DESC
         LIMIT 300
         """
     )
     with engine.connect() as conn:
-        return pd.read_sql_query(query, conn)
+        return pd.read_sql_query(query, conn, params=params)
 
 
 def html_autorizacao_faturamento(dados: dict) -> str:
@@ -10512,7 +10580,7 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
     )
 
     try:
-        vendas = listar_vendas_para_faturamento()
+        vendas = listar_vendas_para_faturamento(usuario)
     except Exception as erro:
         st.error(f"Não foi possível listar vendas. Detalhe: {erro}")
         vendas = pd.DataFrame()
@@ -10584,6 +10652,12 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
         )
         if ficha_sel:
             pre = carregar_venda_para_faturamento(int(ficha_sel))
+        # Bloqueia vendedor de faturar venda de outro
+        if usuario.get("tipo") == "vendedor" and usuario.get("vendedor_id"):
+            if int(pre.get("vendedor_id") or 0) != int(usuario["vendedor_id"]):
+                st.error("Esta venda pertence a outro vendedor.")
+                pre = {}
+                ficha_sel = None
             if not pre:
                 st.warning("Venda não encontrada ou ainda não marcada como comprou.")
     else:
@@ -10875,87 +10949,143 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
     # ---- Histórico com filtros ----
     st.markdown("---")
     st.subheader("Histórico de faturamentos")
-    fc1, fc2, fc3 = st.columns(3)
-    f_nome = fc1.text_input("Filtro nome cliente", key="fat_f_nome")
-    f_vend = fc2.text_input("Filtro vendedor", key="fat_f_vend")
-    f_placa = fc3.text_input("Filtro placa", key="fat_f_placa")
-    fc4, fc5, fc6 = st.columns(3)
-    f_cpf = fc4.text_input("Filtro CPF/CNPJ", key="fat_f_cpf")
-    f_carro = fc5.text_input("Filtro carro/modelo", key="fat_f_carro")
-    f_entrada = fc6.text_input("Filtro entrada total (núm.)", key="fat_f_ent")
+    st.caption(
+        "Não lista tudo automaticamente (fica lento com centenas de registros). "
+        "Pesquise por nome, placa, CPF, vendedor ou carro e clique em Buscar."
+    )
 
-    try:
-        with engine.connect() as conn:
-            hist = pd.read_sql_query(
-                text(
+    fc1, fc2, fc3 = st.columns(3)
+    f_nome = fc1.text_input("Nome do cliente", key="fat_f_nome")
+    f_vend = fc2.text_input("Vendedor", key="fat_f_vend")
+    f_placa = fc3.text_input("Placa", key="fat_f_placa")
+    fc4, fc5, fc6 = st.columns(3)
+    f_cpf = fc4.text_input("CPF/CNPJ", key="fat_f_cpf")
+    f_carro = fc5.text_input("Carro/modelo", key="fat_f_carro")
+    f_entrada = fc6.text_input("Entrada total (núm.)", key="fat_f_ent")
+
+    buscar = st.button("Buscar faturamentos", type="primary", key="fat_hist_buscar")
+    tem_filtro = any(
+        str(x or "").strip()
+        for x in (f_nome, f_vend, f_placa, f_cpf, f_carro, f_entrada)
+    )
+
+    if not buscar and not tem_filtro:
+        st.info("Digite ao menos um filtro e clique em **Buscar faturamentos**.")
+    else:
+        try:
+            filtros_sql = ["TRUE"]
+            params: Dict[str, Any] = {}
+            tipo = str(usuario.get("tipo") or "")
+            # Escopo por papel
+            if tipo == "vendedor":
+                filtros_sql.append(
+                    "LOWER(COALESCE(vendedor_nome, '')) = LOWER(:vend_nome)"
+                )
+                params["vend_nome"] = str(usuario.get("nome") or "")
+                # também por id se a coluna existir no futuro — fallback nome
+            elif tipo == "gerente":
+                # faturamentos de vendedores da loja (pelo nome dos vendedores da loja)
+                filtros_sql.append(
                     """
-                    SELECT
-                        id,
-                        vendedor_nome,
-                        nome,
-                        cpf_cnpj,
-                        placa,
-                        modelo,
-                        entrada_total,
-                        status,
-                        created_at,
-                        obs_editada_uma_vez
-                    FROM public.faturamentos
-                    ORDER BY created_at DESC
-                    LIMIT 200
+                    (
+                        vendedor_nome IN (
+                            SELECT v.nome FROM public.vendedores v
+                            WHERE UPPER(COALESCE(v.loja, '381')) = UPPER(:loja_g)
+                        )
+                        OR criado_por_id IN (
+                            SELECT u.id FROM public.usuarios u
+                            WHERE UPPER(COALESCE(u.loja, '381')) = UPPER(:loja_g)
+                        )
+                    )
                     """
-                ),
-                conn,
-            )
-        if hist.empty:
-            st.info("Nenhum faturamento ainda.")
-        else:
-            if f_nome:
-                hist = hist[hist["nome"].fillna("").str.contains(f_nome, case=False, na=False)]
-            if f_vend:
-                hist = hist[hist["vendedor_nome"].fillna("").str.contains(f_vend, case=False, na=False)]
-            if f_placa:
-                hist = hist[hist["placa"].fillna("").str.contains(f_placa, case=False, na=False)]
-            if f_cpf:
-                hist = hist[hist["cpf_cnpj"].fillna("").str.contains(f_cpf, case=False, na=False)]
-            if f_carro:
-                hist = hist[hist["modelo"].fillna("").str.contains(f_carro, case=False, na=False)]
-            if f_entrada:
+                )
+                params["loja_g"] = normalizar_loja(usuario.get("loja"))
+
+            if f_nome and f_nome.strip():
+                filtros_sql.append("nome ILIKE :fn")
+                params["fn"] = f"%{f_nome.strip()}%"
+            if f_vend and f_vend.strip():
+                filtros_sql.append("vendedor_nome ILIKE :fv")
+                params["fv"] = f"%{f_vend.strip()}%"
+            if f_placa and f_placa.strip():
+                filtros_sql.append("REPLACE(UPPER(COALESCE(placa,'')), '-', '') ILIKE :fp")
+                params["fp"] = f"%{f_placa.strip().replace('-', '').upper()}%"
+            if f_cpf and f_cpf.strip():
+                filtros_sql.append("cpf_cnpj ILIKE :fc")
+                params["fc"] = f"%{f_cpf.strip()}%"
+            if f_carro and f_carro.strip():
+                filtros_sql.append("modelo ILIKE :fcar")
+                params["fcar"] = f"%{f_carro.strip()}%"
+            if f_entrada and str(f_entrada).strip():
                 try:
-                    val = float(f_entrada.replace(",", "."))
-                    hist = hist[hist["entrada_total"].fillna(0).astype(float) == val]
-                except Exception:
+                    params["fe"] = float(str(f_entrada).replace(",", "."))
+                    filtros_sql.append("entrada_total = :fe")
+                except ValueError:
                     pass
 
-            st.dataframe(
-                hist.rename(columns={
-                    "vendedor_nome": "Vendedor",
-                    "nome": "Cliente",
-                    "cpf_cnpj": "CPF/CNPJ",
-                    "placa": "Placa",
-                    "modelo": "Carro",
-                    "entrada_total": "Entrada total",
-                    "status": "Status",
-                    "created_at": "Criado em",
-                    "obs_editada_uma_vez": "Obs já editada",
-                }),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-            # Edição única de observações / exclusão admin
-            ids = hist["id"].tolist() if not hist.empty else []
-            if ids:
-                sel = st.selectbox("Selecionar faturamento", ids, key="fat_sel_hist")
+            where = " AND ".join(filtros_sql)
+            with engine.connect() as conn:
+                hist = pd.read_sql_query(
+                    text(
+                        f"""
+                        SELECT
+                            id,
+                            vendedor_nome,
+                            nome,
+                            cpf_cnpj,
+                            placa,
+                            modelo,
+                            entrada_total,
+                            status,
+                            created_at,
+                            obs_editada_uma_vez
+                        FROM public.faturamentos
+                        WHERE {where}
+                        ORDER BY created_at DESC
+                        LIMIT 80
+                        """
+                    ),
+                    conn,
+                    params=params,
+                )
+            if hist.empty:
+                st.warning("Nenhum faturamento encontrado com esses filtros.")
+            else:
+                st.dataframe(
+                    hist.rename(
+                        columns={
+                            "vendedor_nome": "Vendedor",
+                            "nome": "Cliente",
+                            "cpf_cnpj": "CPF/CNPJ",
+                            "placa": "Placa",
+                            "modelo": "Carro",
+                            "entrada_total": "Entrada total",
+                            "status": "Status",
+                            "created_at": "Criado em",
+                            "obs_editada_uma_vez": "Obs já editada",
+                        }
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                ids = hist["id"].tolist()
+                sel = st.selectbox(
+                    "Abrir faturamento da lista",
+                    ids,
+                    format_func=lambda i: (
+                        f"#{i} — {hist.loc[hist['id']==i, 'nome'].iloc[0]} "
+                        f"/ {hist.loc[hist['id']==i, 'placa'].iloc[0]}"
+                    ),
+                    key="fat_sel_hist",
+                )
                 row = hist[hist["id"] == sel].iloc[0]
                 ja_editou = bool(row.get("obs_editada_uma_vez"))
 
-                # Download / pré-visualização sempre disponível
                 try:
                     html_hist = html_completo_faturamento(int(sel))
                 except Exception as err_h:
                     html_hist = ""
-                    st.caption(f"Não gerou HTML: {err_h}")
+                    st.caption(f"HTML: {err_h}")
                 if html_hist:
                     st.download_button(
                         "⬇️ Baixar HTML deste faturamento",
@@ -10997,10 +11127,15 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
                     st.caption("Observações deste faturamento já foram editadas uma vez.")
 
                 if usuario_e_gestor() or usuario.get("tipo") == "admin":
-                    if st.button("Apagar faturamento (só gerente/admin)", key=f"fat_del_{sel}"):
+                    if st.button(
+                        "Apagar faturamento (só gerente/admin)",
+                        key=f"fat_del_{sel}",
+                    ):
                         with engine.begin() as conn:
                             conn.execute(
-                                text("DELETE FROM public.faturamento_anexos WHERE faturamento_id = :id"),
+                                text(
+                                    "DELETE FROM public.faturamento_anexos WHERE faturamento_id = :id"
+                                ),
                                 {"id": int(sel)},
                             )
                             conn.execute(
@@ -11009,9 +11144,133 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
                             )
                         st.success("Faturamento apagado.")
                         st.rerun()
-    except Exception as erro:
-        st.caption(f"Histórico indisponível até rodar o schema. ({erro})")
+        except Exception as erro:
+            st.caption(f"Histórico indisponível até rodar o schema. ({erro})")
 
+
+
+
+# ============================================================
+# WEB PUSH (notificação com app fechado)
+# ============================================================
+# Secrets Streamlit:
+#   [push]
+#   register_base_url = "https://seu-site-static.netlify.app"
+#   send_url = "https://xxx.supabase.co/functions/v1/send-push"
+#   secret = "mesmo_MANU_PUSH_SECRET_da_edge"
+#   app_url = "https://manuautomoveis.streamlit.app"
+# ============================================================
+
+def _push_config() -> dict:
+    try:
+        cfg = st.secrets.get("push", {})
+        return {
+            "register_base_url": (cfg.get("register_base_url") or "").rstrip("/"),
+            "send_url": cfg.get("send_url") or "",
+            "secret": cfg.get("secret") or "",
+            "app_url": cfg.get("app_url") or "https://manuautomoveis.streamlit.app",
+        }
+    except Exception:
+        return {
+            "register_base_url": "",
+            "send_url": "",
+            "secret": "",
+            "app_url": "https://manuautomoveis.streamlit.app",
+        }
+
+
+def enviar_push_web(
+    titulo: str,
+    corpo: str,
+    usuario_ids: Optional[list] = None,
+    broadcast: bool = False,
+    url: Optional[str] = None,
+) -> dict:
+    """
+    Dispara Web Push via Edge Function Supabase.
+    usuario_ids = lista de public.usuarios.id
+    broadcast=True = todos com inscrição ativa.
+    """
+    import json
+    import urllib.request
+    import urllib.error
+
+    cfg = _push_config()
+    if not cfg["send_url"] or not cfg["secret"]:
+        return {"ok": False, "erro": "push não configurado nos secrets"}
+
+    payload = {
+        "title": titulo,
+        "body": corpo,
+        "url": url or cfg["app_url"],
+    }
+    if broadcast:
+        payload["broadcast"] = True
+    elif usuario_ids:
+        payload["usuario_ids"] = [int(x) for x in usuario_ids if x]
+    else:
+        return {"ok": False, "erro": "sem destinatários"}
+
+    req = urllib.request.Request(
+        cfg["send_url"],
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-manu-push-secret": cfg["secret"],
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8")[:300]
+        except Exception:
+            body = str(e)
+        return {"ok": False, "erro": f"HTTP {e.code}: {body}"}
+    except Exception as e:
+        return {"ok": False, "erro": str(e)}
+
+
+def url_ativar_push(usuario: Dict[str, Any]) -> Optional[str]:
+    cfg = _push_config()
+    base = cfg.get("register_base_url") or ""
+    uid = usuario.get("id")
+    if not base or not uid:
+        return None
+    return f"{base}/register.html?uid={int(uid)}"
+
+
+def bloco_ativar_notificacoes_push(usuario: Dict[str, Any]) -> None:
+    """Mostra no sidebar / página: link para ativar push no aparelho."""
+    link = url_ativar_push(usuario)
+    if not link:
+        if usuario_e_admin():
+            st.sidebar.caption(
+                "Push: configure [push] register_base_url nos Secrets "
+                "(veja pasta push_notificacoes)."
+            )
+        return
+
+    st.sidebar.markdown(
+        f'<a href="{link}" target="_blank" rel="noopener">'
+        f'<button style="width:100%;padding:8px;border-radius:8px;'
+        f'border:1px solid #243041;background:#1a2330;color:#e8eef7;'
+        f'cursor:pointer;margin:4px 0;">📱 Ativar notificações do celular</button></a>',
+        unsafe_allow_html=True,
+    )
+    if usuario_e_admin():
+        if st.sidebar.button("Testar push (só admin)", key="push_test_admin"):
+            r = enviar_push_web(
+                "Teste Manu",
+                "Se você leu isso com o app fechado, está perfeito.",
+                usuario_ids=[usuario.get("id")],
+            )
+            if r.get("ok") or r.get("sent"):
+                st.sidebar.success(f"Enviado: {r}")
+            else:
+                st.sidebar.error(f"Falha: {r}")
 
 
 # ============================================================
@@ -11193,7 +11452,7 @@ PERSONALIDADE
 - Quando a pessoa estiver mal: escute e acolha PRIMEIRO. Não despeje métrica no desabafo.
 - Quando pedir evolução, script de mensagem, análise de lead: seja prático e específico usando o contexto.
 - Varie o jeito de falar. Não repita o mesmo bloco. Não pareça robô nem receita de bolo.
-- Respostas naturais (algumas frases até uns poucos parágrafos). Sem textão infinito.
+- Pode usar quantas linhas forem necessárias para ser útil. Prefira objetividade: diga o essencial bem, sem enrolar nem encher linguiça.
 
 LIMITES
 - {codigo}
@@ -11248,7 +11507,7 @@ def _chamar_gemini(mensagens: list, sistema: str) -> Tuple[Optional[str], Option
         "contents": contents,
         "generationConfig": {
             "temperature": 0.9,
-            "maxOutputTokens": 1024,
+            "maxOutputTokens": 4096,
         },
     }
 
@@ -11312,7 +11571,7 @@ def _chamar_xai(mensagens: list, sistema: str) -> Tuple[Optional[str], Optional[
         "model": model,
         "messages": [{"role": "system", "content": sistema}] + mensagens,
         "temperature": 0.9,
-        "max_tokens": 900,
+        "max_tokens": 4096,
     }
     req = urllib.request.Request(
         "https://api.x.ai/v1/chat/completions",
@@ -11373,7 +11632,7 @@ def _fallback_sem_api(pergunta: str, contexto: str, usuario: Dict[str, Any]) -> 
     p = (pergunta or "").lower()
 
     if any(x in p for x in ("quem é você", "quem e voce", "quem voce", "quem eh", "quem foi")):
-        return "sou Manu Automóveis seu suporte pessoal!"
+        return "sou Suporte Manu Automóveis"
     if any(x in p for x in ("quem te criou", "quem criou")):
         return "Nasci pra te ajudar e caso precise de um amigo!"
 
