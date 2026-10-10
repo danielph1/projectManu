@@ -2086,6 +2086,20 @@ def criar_notificacao_nova_ficha(
             "ficha_id": ficha_id,
         },
     )
+    try:
+        ids = ids_usuarios_ativos(
+            tipos=["gerente", "admin", "administrador", "dono", "owner", "elfenai", "elfen_ai"],
+        )
+        if vendedor_id:
+            ids += ids_usuarios_ativos(vendedor_id=int(vendedor_id))
+        ids = list({int(i) for i in ids})
+        enviar_push_web(
+            "Nova ficha de crédito pendente",
+            f"A ficha de {nome_cliente} foi criada e aguarda análise.",
+            usuario_ids=ids,
+        )
+    except Exception:
+        pass
 
 
 def criar_ficha_credito(
@@ -2958,6 +2972,15 @@ def salvar_processo_transferencia(
             )
 
         st.success("Processo de transferência atualizado.")
+        try:
+            notificar(
+                "Transferência atualizada",
+                "Há atualização em processo de transferência.",
+                tipos=["documentista", "documento", "gerente", "admin"],
+                tipo="transferencia",
+            )
+        except Exception:
+            pass
         st.cache_data.clear()
         st.rerun()
     except Exception as erro:
@@ -4343,6 +4366,7 @@ def mostrar_sidebar(usuario: Dict[str, Any]) -> None:
             limpar_sessao()
 
         bloco_ativar_notificacoes_push(usuario)
+        painel_notificacoes_recentes(usuario)
 
         st.markdown("---")
         st.header("Navegação")
@@ -4971,6 +4995,16 @@ def mostrar_formulario_novo_lead(
 
         st.cache_data.clear()
         st.success("Lead inserido com sucesso.")
+        try:
+            notificar(
+                "Novo lead",
+                f"{usuario.get('nome', 'Vendedor')} cadastrou um lead.",
+                tipos=["gerente", "admin", "marketing"],
+                loja=usuario.get("loja"),
+                tipo="lead",
+            )
+        except Exception:
+            pass
         st.session_state["abrir_formulario"] = False
         st.rerun()
 
@@ -5873,6 +5907,15 @@ def pagina_estoque(usuario: Dict[str, Any]) -> None:
                             )
                         st.cache_data.clear()
                         st.success("Carro cadastrado no estoque.")
+                        try:
+                            notificar(
+                                "Estoque: carro novo",
+                                "Um veículo novo entrou no estoque.",
+                                broadcast=True,
+                                tipo="estoque",
+                            )
+                        except Exception:
+                            pass
                         st.rerun()
                     except Exception as erro:
                         st.error(f"Erro ao cadastrar carro: {erro}")
@@ -8538,9 +8581,17 @@ def pagina_tarefas(usuario: Dict[str, Any]) -> None:
                                         },
                                     )
                             st.success(
-                                f"Tarefa criada para {len(dests)} destinatário(s). "
-                                f"(por: {usuario.get('nome')})"
+                                f"Tarefa criada para {len(dests)} destinatário(s)."
                             )
+                            try:
+                                notificar(
+                                    "Nova tarefa",
+                                    "Você recebeu uma tarefa no sistema Manu.",
+                                    tipos=["vendedor", "gerente", "guariba", "mecanico", "documentista"],
+                                    tipo="tarefa",
+                                )
+                            except Exception:
+                                pass
                             st.rerun()
                         except Exception as erro:
                             st.error(
@@ -8890,6 +8941,15 @@ def pagina_metas(usuario: Dict[str, Any]) -> None:
                                 },
                             )
                         st.success("Meta criada.")
+                        try:
+                            notificar(
+                                "Nova meta",
+                                "Uma meta foi criada para você ou sua equipe.",
+                                tipos=["vendedor", "gerente", "admin", "guariba", "mecanico"],
+                                tipo="meta",
+                            )
+                        except Exception:
+                            pass
                         st.rerun()
                     except Exception as erro:
                         # Fallback sem colunas novas
@@ -9517,6 +9577,15 @@ def cadastrar_carro_oficina(
                 )
 
         st.success("Carro cadastrado na oficina.")
+        try:
+            notificar(
+                "Oficina: carro novo",
+                "Um carro foi adicionado na oficina.",
+                broadcast=True,
+                tipo="oficina",
+            )
+        except Exception:
+            pass
         st.cache_data.clear()
         st.rerun()
     except Exception as erro:
@@ -9607,6 +9676,15 @@ def salvar_oficina_carro(
                 placa=placa,
             )
 
+        try:
+            notificar(
+                "Oficina atualizada",
+                "Status de um carro na oficina foi alterado.",
+                tipos=["guariba", "mecanico", "gerente", "admin"],
+                tipo="oficina",
+            )
+        except Exception:
+            pass
         st.success("Dados da oficina salvos (pátio do estoque sincronizado).")
         st.cache_data.clear()
         st.rerun()
@@ -10917,6 +10995,15 @@ def pagina_faturamento(usuario: Dict[str, Any]) -> None:
                     {"b": STORAGE_BUCKET_ARQUIVOS, "p": caminho2, "id": fid},
                 )
             st.success(f"Faturamento #{fid} salvo.")
+            try:
+                notificar(
+                    "Novo faturamento",
+                    f"Faturamento #{fid} emitido.",
+                    tipos=["gerente", "admin", "documentista", "financeiro"],
+                    tipo="faturamento",
+                )
+            except Exception:
+                pass
             st.session_state["faturamento_html_preview"] = html_full
             st.session_state["faturamento_id_preview"] = fid
         except Exception as erro:
@@ -11240,6 +11327,161 @@ def url_ativar_push(usuario: Dict[str, Any]) -> Optional[str]:
     if not base or not uid:
         return None
     return f"{base}/register.html?uid={int(uid)}"
+
+
+
+def ids_usuarios_ativos(
+    tipos: Optional[list] = None,
+    loja: Optional[str] = None,
+    vendedor_id: Optional[int] = None,
+    usuario_ids: Optional[list] = None,
+) -> list:
+    """Lista public.usuarios.id ativos filtrados."""
+    filtros = ["COALESCE(ativo, TRUE) = TRUE"]
+    params: Dict[str, Any] = {}
+    if usuario_ids:
+        return [int(x) for x in usuario_ids if x]
+    if tipos:
+        # normaliza tipos do banco
+        tipos_l = [str(t).lower().strip() for t in tipos]
+        filtros.append(
+            """
+            REGEXP_REPLACE(LOWER(COALESCE(tipo, '')), '[^a-z0-9]', '', 'g')
+            = ANY(:tipos)
+            """
+        )
+        params["tipos"] = tipos_l
+    if loja:
+        filtros.append("UPPER(COALESCE(loja, '381')) = UPPER(:loja)")
+        params["loja"] = str(loja)
+    if vendedor_id:
+        filtros.append("vendedor_id = :vid")
+        params["vid"] = int(vendedor_id)
+    where = " AND ".join(filtros)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(f"SELECT id FROM public.usuarios WHERE {where}"),
+                params,
+            ).fetchall()
+        return [int(r[0]) for r in rows]
+    except Exception:
+        return []
+
+
+def gravar_notificacoes_db(
+    usuario_ids: list,
+    titulo: str,
+    mensagem: str,
+    tipo: str = "geral",
+    ficha_id: Optional[int] = None,
+) -> None:
+    if not usuario_ids:
+        return
+    try:
+        with engine.begin() as conn:
+            for uid in usuario_ids:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO public.notificacoes (
+                            usuario_id, tipo, titulo, mensagem, ficha_id
+                        )
+                        VALUES (:uid, :tipo, :titulo, :msg, :fid)
+                        """
+                    ),
+                    {
+                        "uid": int(uid),
+                        "tipo": tipo[:40],
+                        "titulo": str(titulo)[:120],
+                        "msg": str(mensagem)[:500],
+                        "fid": ficha_id,
+                    },
+                )
+    except Exception:
+        pass
+
+
+def notificar(
+    titulo: str,
+    mensagem: str,
+    *,
+    usuario_ids: Optional[list] = None,
+    tipos: Optional[list] = None,
+    loja: Optional[str] = None,
+    vendedor_id: Optional[int] = None,
+    broadcast: bool = False,
+    tipo: str = "geral",
+    ficha_id: Optional[int] = None,
+    push: bool = True,
+) -> None:
+    """
+    Notificação unificada: grava no banco + Web Push (app fechado).
+    Use em qualquer evento do sistema.
+    """
+    ids: list = []
+    if broadcast:
+        ids = ids_usuarios_ativos()
+    elif usuario_ids:
+        ids = [int(x) for x in usuario_ids if x]
+    else:
+        ids = ids_usuarios_ativos(tipos=tipos, loja=loja, vendedor_id=vendedor_id)
+    # unique
+    ids = list({int(i) for i in ids if i})
+    if not ids:
+        return
+    gravar_notificacoes_db(ids, titulo, mensagem, tipo=tipo, ficha_id=ficha_id)
+    if push:
+        try:
+            enviar_push_web(titulo, mensagem[:180], usuario_ids=ids)
+        except Exception:
+            pass
+
+
+def painel_notificacoes_recentes(usuario: Dict[str, Any]) -> None:
+    """Mostra últimas notificações do usuário no sidebar (atualiza a cada rerun)."""
+    uid = usuario.get("id")
+    if not uid:
+        return
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT titulo, mensagem, created_at, lida
+                    FROM public.notificacoes
+                    WHERE usuario_id = :uid
+                    ORDER BY created_at DESC
+                    LIMIT 8
+                    """
+                ),
+                {"uid": int(uid)},
+            ).mappings().all()
+        if not rows:
+            return
+        n_novas = sum(1 for r in rows if not r.get("lida"))
+        with st.sidebar.expander(
+            f"🔔 Avisos{f' ({n_novas} novos)' if n_novas else ''}",
+            expanded=bool(n_novas),
+        ):
+            for r in rows:
+                flag = "• " if not r.get("lida") else ""
+                st.caption(f"{flag}**{r['titulo']}** — {str(r['mensagem'])[:80]}")
+            if st.button("Marcar avisos como lidos", key="notif_marcar_lidos"):
+                with engine.begin() as conn:
+                    conn.execute(
+                        text(
+                            """
+                            UPDATE public.notificacoes
+                            SET lida = TRUE
+                            WHERE usuario_id = :uid AND COALESCE(lida, FALSE) = FALSE
+                            """
+                        ),
+                        {"uid": int(uid)},
+                    )
+                st.rerun()
+    except Exception:
+        pass
 
 
 def bloco_ativar_notificacoes_push(usuario: Dict[str, Any]) -> None:
