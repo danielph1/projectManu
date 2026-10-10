@@ -7114,7 +7114,7 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
             grupo_anterior = grupo
 
         status_label = {
-            "pendente": "⏳ Pendente",
+            "pendente": "Pendente",
             "aprovada": "✅ Aprovada",
             "negada": "❌ Negada",
         }.get(ficha["status_geral"], ficha["status_geral"])
