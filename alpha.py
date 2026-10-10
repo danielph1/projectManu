@@ -9474,8 +9474,15 @@ def cadastrar_carro_oficina(
     ano_modelo: str,
     placa: str,
     cor: str = "",
+    valor_carro: Optional[float] = None,
 ) -> None:
-    if not usuario_tem("manage_oficina") and not usuario_e_gerente():
+    """
+    Cadastra na oficina e sincroniza com estoque:
+    - se a placa já existe no estoque → só vincula (não duplica)
+    - se não existe → cria no estoque com preço (valor_carro)
+    - se a placa já foi de veículo vendido → marca RECAL e notifica
+    """
+    if not usuario_tem("manage_oficina") and not usuario_e_gerente() and not usuario_e_admin():
         st.error("Você não pode cadastrar carros na oficina.")
         return
 
@@ -9484,6 +9491,10 @@ def cadastrar_carro_oficina(
     ano_modelo = (ano_modelo or "").strip()
     placa_norm = normalizar_placa(placa)
     cor = (cor or "").strip() or None
+    try:
+        preco = float(valor_carro) if valor_carro is not None and str(valor_carro).strip() != "" else None
+    except (TypeError, ValueError):
+        preco = None
 
     if not marca or not modelo or not ano_modelo or not placa_norm:
         st.error("Informe marca, modelo, ano/modelo e placa.")
@@ -9496,49 +9507,131 @@ def cadastrar_carro_oficina(
                     """
                     SELECT id
                     FROM public.oficina_carros
-                    WHERE REPLACE(REPLACE(UPPER(placa), '-', ''), ' ', '') = :placa
-                    LIMIT 1
-                    """
-                ),
-                {"placa": placa_norm},
-            ).scalar()
-
-            estoque_id = conn.execute(
-                text(
-                    """
-                    SELECT id
-                    FROM public.estoque_carros
                     WHERE REPLACE(REPLACE(UPPER(COALESCE(placa, '')), '-', ''), ' ', '') = :placa
                     LIMIT 1
                     """
                 ),
                 {"placa": placa_norm},
             ).scalar()
-
             if existente:
                 st.warning("Já existe um carro na oficina com essa placa.")
                 return
 
+            # Estoque pela placa
+            est = conn.execute(
+                text(
+                    """
+                    SELECT id, status, preco, carro, marca, modelo
+                    FROM public.estoque_carros
+                    WHERE REPLACE(REPLACE(UPPER(COALESCE(placa, '')), '-', ''), ' ', '') = :placa
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """
+                ),
+                {"placa": placa_norm},
+            ).mappings().first()
+
+            estoque_id = None
+            eh_recal = False
+            if est:
+                estoque_id = int(est["id"])
+                status_txt = str(est.get("status") or "").lower()
+                if "vend" in status_txt:
+                    eh_recal = True
+                    # Volta para disponível / recal no estoque
+                    try:
+                        conn.execute(
+                            text(
+                                """
+                                UPDATE public.estoque_carros
+                                SET status = 'RECAL',
+                                    patio = COALESCE(patio, 'Oficina'),
+                                    preco = COALESCE(:preco, preco)
+                                WHERE id = :id
+                                """
+                            ),
+                            {"id": estoque_id, "preco": preco},
+                        )
+                    except Exception:
+                        conn.execute(
+                            text(
+                                """
+                                UPDATE public.estoque_carros
+                                SET status = 'RECAL'
+                                WHERE id = :id
+                                """
+                            ),
+                            {"id": estoque_id},
+                        )
+            else:
+                # Placa nova → entra no estoque automaticamente
+                try:
+                    estoque_id = conn.execute(
+                        text(
+                            """
+                            INSERT INTO public.estoque_carros (
+                                marca, carro, modelo, preco, ano, patio,
+                                cor, placa, status
+                            )
+                            VALUES (
+                                :marca, :carro, :modelo, :preco, :ano, 'Oficina',
+                                :cor, :placa, 'Disponível'
+                            )
+                            RETURNING id
+                            """
+                        ),
+                        {
+                            "marca": marca,
+                            "carro": f"{marca} {modelo}".strip(),
+                            "modelo": modelo,
+                            "preco": preco if preco is not None else 0,
+                            "ano": ano_modelo,
+                            "cor": cor,
+                            "placa": placa_norm,
+                        },
+                    ).scalar_one()
+                except Exception as erro_est:
+                    # fallback mínimo de colunas
+                    try:
+                        estoque_id = conn.execute(
+                            text(
+                                """
+                                INSERT INTO public.estoque_carros (
+                                    marca, modelo, preco, placa, status
+                                )
+                                VALUES (
+                                    :marca, :modelo, :preco, :placa, 'Disponível'
+                                )
+                                RETURNING id
+                                """
+                            ),
+                            {
+                                "marca": marca,
+                                "modelo": modelo,
+                                "preco": preco if preco is not None else 0,
+                                "placa": placa_norm,
+                            },
+                        ).scalar_one()
+                    except Exception:
+                        st.warning(
+                            f"Oficina ok, mas estoque não sincronizou: {erro_est}"
+                        )
+                        estoque_id = None
+
+            obs_recal = "RECAL — veículo retornou (já havia sido vendido)." if eh_recal else None
             carro_id = conn.execute(
                 text(
                     """
                     INSERT INTO public.oficina_carros (
-                        marca,
-                        modelo,
-                        ano_modelo,
-                        placa,
-                        cor,
-                        estoque_carro_id,
-                        atualizado_por_id
+                        marca, modelo, ano_modelo, placa, cor,
+                        estoque_carro_id, atualizado_por_id,
+                        onde_esta, observacao, valor_final, pronto
                     )
                     VALUES (
-                        :marca,
-                        :modelo,
-                        :ano_modelo,
-                        :placa,
-                        :cor,
-                        :estoque_carro_id,
-                        :usuario_id
+                        :marca, :modelo, :ano_modelo, :placa, :cor,
+                        :estoque_carro_id, :usuario_id,
+                        'Oficina', :observacao,
+                        :valor_final, FALSE
                     )
                     RETURNING id
                     """
@@ -9551,45 +9644,70 @@ def cadastrar_carro_oficina(
                     "cor": cor,
                     "estoque_carro_id": int(estoque_id) if estoque_id else None,
                     "usuario_id": usuario["id"],
+                    "observacao": obs_recal,
+                    "valor_final": (
+                        str(preco) if preco is not None else None
+                    ),
                 },
             ).scalar_one()
 
-            # Placa nova (não estava na oficina): notifica todos.
-            notificar_usuarios_oficina(
-                conn,
-                titulo="Novo carro na oficina",
-                mensagem=(
-                    f"{marca} {modelo} ({ano_modelo}) placa {placa_norm} "
-                    "entrou na oficina."
-                ),
-                placa=None,
+            # Notificações
+            msg = (
+                f"{marca} {modelo} ({ano_modelo}) placa {placa_norm} "
+                "entrou na oficina"
             )
+            if preco is not None:
+                msg += f" · valor R$ {preco:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            if eh_recal:
+                msg += " · RECAL (já foi vendido)"
 
-            if estoque_id:
-                notificar_usuarios_oficina(
-                    conn,
-                    titulo="Carro do estoque na oficina",
-                    mensagem=(
-                        f"O carro placa {placa_norm} (já no estoque) "
-                        "foi adicionado à oficina."
-                    ),
-                    placa=None,
+            try:
+                notificar(
+                    "Novo carro na oficina" + (" · RECAL" if eh_recal else ""),
+                    msg,
+                    broadcast=True,
+                    tipo="oficina",
                 )
+            except Exception:
+                pass
 
-        st.success("Carro cadastrado na oficina.")
-        try:
-            notificar(
-                "Oficina: carro novo",
-                "Um carro foi adicionado na oficina.",
-                broadcast=True,
-                tipo="oficina",
-            )
-        except Exception:
-            pass
+            # Se RECAL, tenta achar vendedor ligado a venda/lead com essa placa
+            if eh_recal:
+                try:
+                    vend = conn.execute(
+                        text(
+                            """
+                            SELECT DISTINCT u.id
+                            FROM public.usuarios u
+                            JOIN public.leads l ON l.vendedor_id = u.vendedor_id
+                            WHERE REPLACE(REPLACE(UPPER(COALESCE(l.placa, '')), '-', ''), ' ', '') = :placa
+                              AND COALESCE(u.ativo, TRUE) = TRUE
+                            LIMIT 5
+                            """
+                        ),
+                        {"placa": placa_norm},
+                    ).fetchall()
+                    ids = [int(r[0]) for r in vend]
+                    if ids:
+                        notificar(
+                            "RECAL na oficina",
+                            f"Placa {placa_norm} voltou para oficina/estoque (RECAL).",
+                            usuario_ids=ids,
+                            tipo="recal",
+                        )
+                except Exception:
+                    pass
+
+        st.success(
+            "Carro cadastrado na oficina"
+            + (" e no estoque." if not est else " (já existia no estoque).")
+            + (" Marcado como RECAL." if eh_recal else "")
+        )
         st.cache_data.clear()
         st.rerun()
     except Exception as erro:
-        st.error(f"Erro ao cadastrar carro na oficina: {erro}")
+        st.error(f"Erro ao cadastrar na oficina: {erro}")
+
 
 
 def salvar_oficina_carro(
@@ -9770,6 +9888,22 @@ def pagina_oficina(usuario: Dict[str, Any]) -> None:
         st.error("Você não tem permissão para acessar a oficina.")
         return
 
+    # Carro marcado "pronto" há mais de 4 dias → sai da oficina automaticamente
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    DELETE FROM public.oficina_carros
+                    WHERE COALESCE(pronto, FALSE) = TRUE
+                      AND COALESCE(updated_at, created_at, NOW())
+                          < (NOW() - INTERVAL '4 days')
+                    """
+                )
+            )
+    except Exception:
+        pass
+
     st.title("Oficina")
     st.caption(
         "Todos podem consultar e pesquisar. "
@@ -9798,6 +9932,13 @@ def pagina_oficina(usuario: Dict[str, Any]) -> None:
                 ano_modelo = c3.text_input("Ano/modelo*")
                 placa = c4.text_input("Placa*")
                 cor = st.text_input("Cor")
+                valor_carro = st.number_input(
+                    "Valor do carro (R$) — entra no estoque",
+                    min_value=0.0,
+                    value=0.0,
+                    step=100.0,
+                    help="Se a placa for nova no estoque, cadastra com este preço.",
+                )
                 salvar = st.form_submit_button(
                     "Cadastrar",
                     use_container_width=True,
@@ -9811,6 +9952,7 @@ def pagina_oficina(usuario: Dict[str, Any]) -> None:
                     ano_modelo,
                     placa,
                     cor,
+                    valor_carro=valor_carro if valor_carro and valor_carro > 0 else None,
                 )
 
     aba_lista, aba_pesquisa = st.tabs(["Carros", "Pesquisar"])
@@ -11452,7 +11594,7 @@ def painel_notificacoes_recentes(usuario: Dict[str, Any]) -> None:
                     FROM public.notificacoes
                     WHERE usuario_id = :uid
                     ORDER BY created_at DESC
-                    LIMIT 8
+                    LIMIT 5
                     """
                 ),
                 {"uid": int(uid)},
@@ -11460,13 +11602,17 @@ def painel_notificacoes_recentes(usuario: Dict[str, Any]) -> None:
         if not rows:
             return
         n_novas = sum(1 for r in rows if not r.get("lida"))
+        # Sem novos → não polui a sidebar
+        if n_novas == 0:
+            return
         with st.sidebar.expander(
-            f"🔔 Avisos{f' ({n_novas} novos)' if n_novas else ''}",
-            expanded=bool(n_novas),
+            f"🔔 Avisos ({n_novas} novos)",
+            expanded=True,
         ):
             for r in rows:
-                flag = "• " if not r.get("lida") else ""
-                st.caption(f"{flag}**{r['titulo']}** — {str(r['mensagem'])[:80]}")
+                if r.get("lida"):
+                    continue
+                st.caption(f"• **{r['titulo']}** — {str(r['mensagem'])[:80]}")
             if st.button("Marcar avisos como lidos", key="notif_marcar_lidos"):
                 with engine.begin() as conn:
                     conn.execute(
