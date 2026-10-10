@@ -7103,9 +7103,9 @@ def pagina_fichas(usuario: Dict[str, Any]) -> None:
             bool(esta_na_loja) if pd.notna(esta_na_loja) else False
         )
         if ficha.get("status_geral") != "pendente":
-            grupo = "Analisadas — aprovadas ou negadas"
+            grupo = "Analisadas"
         elif esta_na_loja:
-            grupo = "Pendentes — cliente na loja 🏪"
+            grupo = "Pendentes — cliente na loja"
         else:
             grupo = "Pendentes — cliente fora da loja"
 
