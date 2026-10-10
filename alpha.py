@@ -11499,7 +11499,7 @@ def bloco_ativar_notificacoes_push(usuario: Dict[str, Any]) -> None:
         f'<a href="{link}" target="_blank" rel="noopener">'
         f'<button style="width:100%;padding:8px;border-radius:8px;'
         f'border:1px solid #243041;background:#1a2330;color:#e8eef7;'
-        f'cursor:pointer;margin:4px 0;">📱 Ativar notificações do celular</button></a>',
+        f'cursor:pointer;margin:4px 0;">Ativar notificações do celular</button></a>',
         unsafe_allow_html=True,
     )
     if usuario_e_admin():
